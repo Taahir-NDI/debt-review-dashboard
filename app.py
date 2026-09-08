@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — FINAL WITH GCP_CREDENTIALS
+# 📊 DEBT REVIEW DASHBOARD — FINAL WITH INDIVIDUAL SECRETS
 # ================================================================
 
 import streamlit as st
@@ -37,10 +37,22 @@ def download_file_from_drive(service, file_id):
     fh.seek(0)
     return fh
 
-# ---- Google Drive authentication using GCP_CREDENTIALS ----
+# ---- Google Drive authentication using individual secrets ----
 try:
-    # Parse the single-line JSON credentials
-    creds_info = json.loads(st.secrets["GCP_CREDENTIALS"])
+    # Build credentials dict from individual secrets
+    creds_info = {
+        "type": "service_account",
+        "project_id": st.secrets["PROJECT_ID"],
+        "private_key_id": st.secrets["PRIVATE_KEY_ID"],
+        "private_key": st.secrets["PRIVATE_KEY"],
+        "client_email": st.secrets["CLIENT_EMAIL"],
+        "client_id": st.secrets["CLIENT_ID"],
+        "auth_uri": st.secrets["AUTH_URI"],
+        "token_uri": st.secrets["TOKEN_URI"],
+        "auth_provider_x509_cert_url": st.secrets["AUTH_PROVIDER_X509_CERT_URL"],
+        "client_x509_cert_url": st.secrets["CLIENT_X509_CERT_URL"],
+        "universe_domain": st.secrets.get("UNIVERSE_DOMAIN", "googleapis.com")
+    }
     creds = service_account.Credentials.from_service_account_info(creds_info)
     service = build('drive', 'v3', credentials=creds)
     
@@ -1016,11 +1028,9 @@ new_row = {
 try:
     if os.path.exists(history_file):
         history_df = pd.read_csv(history_file)
-        # Avoid duplicate entries for the same month
         if 'month' in history_df.columns and month_name not in history_df['month'].values:
             history_df = pd.concat([history_df, pd.DataFrame([new_row])], ignore_index=True)
         else:
-            # Update existing row for this month
             idx = history_df[history_df['month'] == month_name].index
             if len(idx) > 0:
                 history_df.loc[idx[0]] = new_row
@@ -1031,7 +1041,6 @@ try:
     
     history_df.to_csv(history_file, index=False)
 except:
-    # If we can't write to file (e.g., read-only environment), just skip
     pass
 
 # Load and display history
@@ -1039,24 +1048,20 @@ if os.path.exists(history_file):
     try:
         history_df = pd.read_csv(history_file)
         if len(history_df) > 1:
-            # Sort by date
             history_df['report_date'] = pd.to_datetime(history_df['report_date'])
             history_df = history_df.sort_values('report_date')
 
             st.subheader("📈 Historical Trends")
 
-            # Chart 1: Settled vs Failed over time
             fig_trend = px.line(history_df, x='report_date', y=['settled_mtd_v', 'failed_mtd_v'],
                                 title='Monthly Settled vs Failed Amount (R)',
                                 labels={'value': 'Amount (R)', 'variable': 'Category'})
             st.plotly_chart(fig_trend, use_container_width=True)
 
-            # Chart 2: Success Rate over time
             fig_sr = px.line(history_df, x='report_date', y='success_rate',
                              title='Success Rate (%) Over Time')
             st.plotly_chart(fig_sr, use_container_width=True)
 
-            # Chart 3: Revenue & Debits
             fig_rd = px.line(history_df, x='report_date', y=['revenue_total', 'current_debits_v', 'next_debits_v'],
                              title='Revenue, Current & Next Month Debits',
                              labels={'value': 'Amount (R)', 'variable': 'Category'})
