@@ -51,6 +51,7 @@ def download_file_from_drive(service, file_id):
     fh.seek(0)
     return fh
 
+drive_connected = False
 try:
     # Build credentials from individual secrets (same as before)
     creds_info = {
@@ -81,11 +82,17 @@ try:
     else:
         payment_content = None
 
-    st.sidebar.success("✅ Connected to Google Drive")
+    drive_connected = True
 
 except Exception as e:
-    st.sidebar.error(f"❌ Error connecting to Google Drive: {e}")
+    st.error(f"❌ Error connecting to Google Drive: {e}")
     st.stop()
+
+# ---- Show Drive connection status at top left ----
+if drive_connected:
+    st.success("✅ Connected to Google Drive")
+else:
+    st.warning("⚠️ Not connected to Google Drive")
 
 # ---- Helper functions ----
 def find_sheet(variants, all_sheets):
@@ -306,6 +313,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             if col not in raw.columns:
                 raw[col] = '' if col in ['client_name', 'cell', 'status'] else 0
         raw['due_date'] = raw['collection_date']
+        # No settlement_date in forecast mode, set effective_settlement_date = collection_date
         raw['effective_settlement_date'] = raw['collection_date']
     else:
         # ---- Read payment report ----
@@ -427,7 +435,12 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         if col in raw.columns:
             raw[col] = pd.to_datetime(raw[col], errors='coerce')
     raw['due_date'] = raw['collection_date']
-    raw['effective_settlement_date'] = raw['settlement_date'].fillna(raw['collection_date'])
+    
+    # ---- Set effective_settlement_date safely ----
+    if 'settlement_date' in raw.columns and not forecast_mode:
+        raw['effective_settlement_date'] = raw['settlement_date'].fillna(raw['collection_date'])
+    else:
+        raw['effective_settlement_date'] = raw['collection_date']
     
     raw = raw[raw['collection_date'] <= today]
     raw = raw[raw['effective_settlement_date'] <= today]
