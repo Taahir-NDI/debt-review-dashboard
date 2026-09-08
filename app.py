@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — STREAMLIT DEFAULT COLOURS
+# 📊 DEBT REVIEW DASHBOARD — FORECAST MODE (DRIVE AUTO‑PULL)
 # ================================================================
 
 import streamlit as st
@@ -18,110 +18,13 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-# ================================================================
-# 0. CUSTOM STYLES (CSS) — Only boxes, no background overrides
-# ================================================================
+# --- Page config ---
 st.set_page_config(page_title="Debt Review Dashboard", layout="wide")
-
-st.markdown("""
-<style>
-    /* --- Metric Cards --- */
-    .metric-card {
-        background-color: #ffffff;
-        border-radius: 12px;
-        padding: 16px 20px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-        margin-bottom: 10px;
-        border-left: 4px solid #4e8cff;
-        transition: box-shadow 0.2s;
-    }
-    .metric-card:hover {
-        box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-    }
-    .metric-label {
-        font-size: 14px;
-        color: #8a8a8a;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.3px;
-    }
-    .metric-value {
-        font-size: 28px;
-        font-weight: 700;
-        color: #1e1e2d;
-        margin-top: 4px;
-    }
-    .metric-delta {
-        font-size: 14px;
-        color: #4e8cff;
-        font-weight: 500;
-        margin-top: 2px;
-    }
-    .metric-delta.positive { color: #28a745; }
-    .metric-delta.negative { color: #dc3545; }
-
-    /* --- Charts Container --- */
-    .chart-container {
-        background-color: #ffffff;
-        border-radius: 12px;
-        padding: 16px 20px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-        margin-bottom: 20px;
-    }
-
-    /* --- Dataframes --- */
-    .dataframe {
-        border: none !important;
-        font-size: 14px !important;
-    }
-    .dataframe thead tr th {
-        background-color: #f8f9fa !important;
-        color: #1e1e2d !important;
-        font-weight: 600 !important;
-        border-bottom: 2px solid #dee2e6 !important;
-    }
-    .dataframe tbody tr {
-        border-bottom: 1px solid #f1f3f5 !important;
-    }
-    .dataframe tbody tr:hover {
-        background-color: #f8f9fa !important;
-    }
-    .dataframe tbody tr:nth-child(even) {
-        background-color: #fcfcfc !important;
-    }
-
-    /* --- Header --- */
-    .main-header {
-        margin-bottom: 24px;
-    }
-    .main-header h1 {
-        font-size: 28px;
-        font-weight: 700;
-        color: #1e1e2d;
-    }
-    .main-header .greeting {
-        font-size: 16px;
-        color: #6c757d;
-        margin-top: -4px;
-    }
-
-    /* --- Hide default Streamlit elements --- */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-</style>
-""", unsafe_allow_html=True)
+st.title("📊 Debt Review Operations Dashboard")
 
 # ================================================================
 # 1. SIDEBAR – OPTIONS
 # ================================================================
-st.sidebar.markdown("""
-<div style="padding: 10px 0 20px 0; text-align: center; color: #1e1e2d;">
-    <h3 style="color: #1e1e2d;">📊 Debt Review</h3>
-    <p style="color: #6c757d; font-size: 14px;">Operations Dashboard</p>
-</div>
-""", unsafe_allow_html=True)
-
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Month Selection")
 
@@ -150,6 +53,7 @@ def download_file_from_drive(service, file_id):
 
 drive_connected = False
 try:
+    # Build credentials from individual secrets (same as before)
     creds_info = {
         "type": "service_account",
         "project_id": st.secrets["PROJECT_ID"],
@@ -166,10 +70,12 @@ try:
     creds = service_account.Credentials.from_service_account_info(creds_info)
     service = build('drive', 'v3', credentials=creds)
 
+    # Get file IDs from secrets
     fee_file_id = st.secrets["FEE_FILE_ID"]
     if not forecast_mode:
         payment_file_id = st.secrets["PAYMENT_FILE_ID"]
 
+    # Download files
     fee_content = download_file_from_drive(service, fee_file_id)
     if not forecast_mode:
         payment_content = download_file_from_drive(service, payment_file_id)
@@ -188,7 +94,7 @@ if drive_connected:
 else:
     st.warning("⚠️ Not connected to Google Drive")
 
-# ---- Helper functions (unchanged) ----
+# ---- Helper functions ----
 def find_sheet(variants, all_sheets):
     for sheet in all_sheets:
         sheet_upper = sheet.upper()
@@ -312,6 +218,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         ref_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today = ref_date
 
+    # fee_content is already a BytesIO – use it directly
     fee_df_current = pd.read_excel(fee_content, sheet_name=current_sheet)
     
     fee_df_next = None
@@ -360,6 +267,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                 next_debits_c = 0
                 next_debits_v = 0
     
+    # ---- Status-based data from Fee Audit ----
     status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col = find_columns(fee_df_current)
     future_mask_current = fee_df_current[status_col].astype(str).str.upper().str.contains('FUTURE', na=False)
     fee_status_df = fee_df_current[~future_mask_current].copy()
@@ -397,14 +305,18 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     fee_base['status'] = fee_base['status'].astype(str).str.strip()
     fee_base = fee_base.dropna(subset=['id_number', 'payment_stage'])
     
+    # ---- If forecast_mode, skip payment report entirely ----
     if forecast_mode:
         raw = fee_base.copy()
+        # Ensure required columns exist
         for col in ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status', 'collection_date']:
             if col not in raw.columns:
                 raw[col] = '' if col in ['client_name', 'cell', 'status'] else 0
         raw['due_date'] = raw['collection_date']
+        # No settlement_date in forecast mode, set effective_settlement_date = collection_date
         raw['effective_settlement_date'] = raw['collection_date']
     else:
+        # ---- Read payment report ----
         try:
             df_pmt = pd.read_excel(payment_content, sheet_name='Details', header=3)
         except:
@@ -516,6 +428,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         
         raw = merged
     
+    # ---- Continue processing (same for both modes) ----
     raw['payment_stage'] = pd.to_numeric(raw['payment_stage'], errors='coerce')
     raw['amount'] = pd.to_numeric(raw['amount'], errors='coerce')
     for col in ['collection_date', 'settlement_date', 'dispute_date', 'cancelled_date']:
@@ -523,6 +436,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             raw[col] = pd.to_datetime(raw[col], errors='coerce')
     raw['due_date'] = raw['collection_date']
     
+    # ---- Set effective_settlement_date safely ----
     if 'settlement_date' in raw.columns and not forecast_mode:
         raw['effective_settlement_date'] = raw['settlement_date'].fillna(raw['collection_date'])
     else:
@@ -679,7 +593,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     else:
         success_rate = 0
     
-    # ---- Priority Queue ----
+    # ---- Priority Queue (ROBUST version) ----
     def get_latest_record(group):
         return group.sort_values('collection_date').iloc[-1]
     
@@ -757,7 +671,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         cols = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level']
         combined_priority = pd.DataFrame(columns=cols)
     
-    # ---- SMS lists ----
+    # ---- SMS lists (ROBUST) ----
     def ensure_columns(df, required_cols):
         for col in required_cols:
             if col not in df.columns:
@@ -1078,262 +992,99 @@ if result is None:
     result['fee_base']
 )
 
-# ================================================================
-# 3. DASHBOARD LAYOUT (Styled)
-# ================================================================
+# ---- Dashboard output ----
+st.success("✅ Data processed successfully!")
 
-st.markdown(f"""
-<div class="main-header">
-    <h1>Debt Review Dashboard</h1>
-    <div class="greeting">Welcome! · Report date: {ref_date_used.strftime('%d %B %Y')}</div>
-</div>
-""", unsafe_allow_html=True)
+st.sidebar.markdown("---")
+st.sidebar.write(f"**Current sheet:** `{current_sheet_used}`")
+st.sidebar.write(f"**Next sheet:** `{next_sheet_used if next_sheet_used else 'None (single mode)'}`")
+st.sidebar.write(f"**Report date:** {ref_date_used.strftime('%d %B %Y')}")
+if single_month_mode:
+    st.sidebar.write(f"**Single Month Mode:** On (ref: {ref_date_used.strftime('%B %Y')})")
+else:
+    st.sidebar.write("**Single Month Mode:** Off")
+if forecast_mode:
+    st.sidebar.info("🔮 Forecast Mode active – data from Fee Audit only")
 
-# ---- Row 1: Main KPIs (4 columns) ----
+# ---- KPIs ----
 col1, col2, col3, col4 = st.columns(4)
+col1.metric("✅ Settled Today", f"R {settled_today_v:,.2f}", f"{settled_today_c} clients")
+if not single_month_mode:
+    col2.metric("📅 Next Month Debits", f"R {next_debits_v:,.2f}", f"{next_debits_c} clients")
+else:
+    col2.metric("📅 Next Month Debits", "N/A", "Single month mode")
+col3.metric("💰 Revenue Total (MTD)", f"R {revenue_total:,.2f}")
+col4.metric("🎯 Success Rate (MTD)", f"{success_rate:.1f}%", "By Value")
 
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Settled Fri-Today", f"R {settled_cycle_v:,.2f}", f"{settled_cycle_c} clients")
+col2.metric("Settled MTD", f"R {settled_mtd_v:,.2f}", f"{settled_mtd_c} clients")
+col3.metric("Failed Fri-Today", f"R {failed_cycle_v:,.2f}", f"{failed_cycle_c} clients")
+col4.metric("Failed MTD", f"R {failed_mtd_v:,.2f}", f"{failed_mtd_c} clients")
+
+st.subheader("🔄 In Progress (Stage 1/2)")
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Settling", f"R {settling_v:,.2f}", f"{settling_c} clients")
+col2.metric("Submitted", f"R {submitted_v:,.2f}", f"{submitted_c} clients")
+col3.metric("Sub Collect", f"R {sub_col_v:,.2f}", f"{sub_col_c} clients")
+col4.metric("Intracking", f"R {tracking_v:,.2f}", f"{tracking_c} clients")
+
+st.subheader("📅 Upcoming Debits (Stage 1/2)")
+col1, col2 = st.columns(2)
+col1.metric("Current Month (tomorrow → end)" if not single_month_mode else "Current Month Debits", 
+            f"R {current_debits_v:,.2f}", f"{current_debits_c} clients")
+if not single_month_mode:
+    col2.metric("Next Month (full month)", f"R {next_debits_v:,.2f}", f"{next_debits_c} clients")
+else:
+    col2.metric("Next Month (full month)", "N/A", "Single month mode")
+
+st.subheader("⚠️ Disputed")
+st.metric("Disputed Clients", f"R {disputed_v:,.2f}", f"{disputed_c} clients")
+
+# ---- Charts ----
+st.subheader("📊 Visual Analytics")
+fig_revenue = px.pie(
+    names=['Restructuring', 'After-Care', 'Admin/App', 'Legal'],
+    values=[forecast_restructuring, forecast_aftercare, forecast_admin_app, forecast_legal],
+    title='Revenue Forecast Breakdown',
+    hole=0.4
+)
+st.plotly_chart(fig_revenue, use_container_width=True)
+
+col1, col2 = st.columns(2)
 with col1:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-label">✅ Settled Today</div>
-        <div class="metric-value">R {settled_today_v:,.2f}</div>
-        <div class="metric-delta">{settled_today_c} clients</div>
-    </div>
-    """, unsafe_allow_html=True)
+    settled_vs_failed = pd.DataFrame({
+        'Category': ['Settled MTD', 'Failed MTD'],
+        'Amount': [settled_mtd_v, failed_mtd_v]
+    })
+    fig_bar = px.bar(settled_vs_failed, x='Category', y='Amount', title='Settled vs Failed (MTD)', color='Category')
+    st.plotly_chart(fig_bar, use_container_width=True)
 
 with col2:
     if not single_month_mode:
-        st.markdown(f"""
-        <div class="metric-card" style="border-left-color: #ff9f43;">
-            <div class="metric-label">📅 Next Month Debits</div>
-            <div class="metric-value">R {next_debits_v:,.2f}</div>
-            <div class="metric-delta">{next_debits_c} clients</div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div class="metric-card" style="border-left-color: #ff9f43;">
-            <div class="metric-label">📅 Next Month Debits</div>
-            <div class="metric-value">N/A</div>
-            <div class="metric-delta">Single month mode</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-with col3:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #28a745;">
-        <div class="metric-label">💰 Revenue Total (MTD)</div>
-        <div class="metric-value">R {revenue_total:,.2f}</div>
-        <div class="metric-delta">&nbsp;</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col4:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #6f42c1;">
-        <div class="metric-label">🎯 Success Rate (MTD)</div>
-        <div class="metric-value">{success_rate:.1f}%</div>
-        <div class="metric-delta">By Value</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# ---- Row 2: Additional metrics (4 columns) ----
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #17a2b8;">
-        <div class="metric-label">Settled Fri-Today</div>
-        <div class="metric-value">R {settled_cycle_v:,.2f}</div>
-        <div class="metric-delta">{settled_cycle_c} clients</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col2:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #17a2b8;">
-        <div class="metric-label">Settled MTD</div>
-        <div class="metric-value">R {settled_mtd_v:,.2f}</div>
-        <div class="metric-delta">{settled_mtd_c} clients</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col3:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #dc3545;">
-        <div class="metric-label">Failed Fri-Today</div>
-        <div class="metric-value">R {failed_cycle_v:,.2f}</div>
-        <div class="metric-delta">{failed_cycle_c} clients</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col4:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #dc3545;">
-        <div class="metric-label">Failed MTD</div>
-        <div class="metric-value">R {failed_mtd_v:,.2f}</div>
-        <div class="metric-delta">{failed_mtd_c} clients</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# ---- Row 3: In Progress (4 columns) ----
-st.markdown("""
-<div style="margin-top: 24px; margin-bottom: 16px;">
-    <h3 style="font-weight: 600; color: #1e1e2d;">🔄 In Progress (Stage 1/2)</h3>
-</div>
-""", unsafe_allow_html=True)
-
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #fd7e14;">
-        <div class="metric-label">Settling</div>
-        <div class="metric-value">R {settling_v:,.2f}</div>
-        <div class="metric-delta">{settling_c} clients</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col2:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #fd7e14;">
-        <div class="metric-label">Submitted</div>
-        <div class="metric-value">R {submitted_v:,.2f}</div>
-        <div class="metric-delta">{submitted_c} clients</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col3:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #fd7e14;">
-        <div class="metric-label">Sub Collect</div>
-        <div class="metric-value">R {sub_col_v:,.2f}</div>
-        <div class="metric-delta">{sub_col_c} clients</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col4:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #20c997;">
-        <div class="metric-label">Intracking</div>
-        <div class="metric-value">R {tracking_v:,.2f}</div>
-        <div class="metric-delta">{tracking_c} clients</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# ---- Row 4: Debits ----
-st.markdown("""
-<div style="margin-top: 24px; margin-bottom: 16px;">
-    <h3 style="font-weight: 600; color: #1e1e2d;">📅 Upcoming Debits (Stage 1/2)</h3>
-</div>
-""", unsafe_allow_html=True)
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.markdown(f"""
-    <div class="metric-card" style="border-left-color: #4e8cff;">
-        <div class="metric-label">{"Current Month (tomorrow → end)" if not single_month_mode else "Current Month Debits"}</div>
-        <div class="metric-value">R {current_debits_v:,.2f}</div>
-        <div class="metric-delta">{current_debits_c} clients</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col2:
-    if not single_month_mode:
-        st.markdown(f"""
-        <div class="metric-card" style="border-left-color: #4e8cff;">
-            <div class="metric-label">Next Month (full month)</div>
-            <div class="metric-value">R {next_debits_v:,.2f}</div>
-            <div class="metric-delta">{next_debits_c} clients</div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown(f"""
-        <div class="metric-card" style="border-left-color: #4e8cff;">
-            <div class="metric-label">Next Month (full month)</div>
-            <div class="metric-value">N/A</div>
-            <div class="metric-delta">Single month mode</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-# ---- Row 5: Disputed ----
-st.markdown("""
-<div style="margin-top: 24px; margin-bottom: 16px;">
-    <h3 style="font-weight: 600; color: #1e1e2d;">⚠️ Disputed</h3>
-</div>
-""", unsafe_allow_html=True)
-
-st.markdown(f"""
-<div class="metric-card" style="border-left-color: #e83e8c; max-width: 25%;">
-    <div class="metric-label">Disputed Clients</div>
-    <div class="metric-value">R {disputed_v:,.2f}</div>
-    <div class="metric-delta">{disputed_c} clients</div>
-</div>
-""", unsafe_allow_html=True)
-
-# ---- Row 6: Charts ----
-st.markdown("""
-<div style="margin-top: 24px; margin-bottom: 16px;">
-    <h3 style="font-weight: 600; color: #1e1e2d;">📊 Visual Analytics</h3>
-</div>
-""", unsafe_allow_html=True)
-
-col1, col2 = st.columns(2)
-
-with col1:
-    with st.container():
-        st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-        st.plotly_chart(px.pie(
-            names=['Restructuring', 'After-Care', 'Admin/App', 'Legal'],
-            values=[forecast_restructuring, forecast_aftercare, forecast_admin_app, forecast_legal],
-            title='Revenue Forecast Breakdown',
-            hole=0.4
-        ), use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-with col2:
-    with st.container():
-        st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-        settled_vs_failed = pd.DataFrame({
-            'Category': ['Settled MTD', 'Failed MTD'],
-            'Amount': [settled_mtd_v, failed_mtd_v]
+        debits_df = pd.DataFrame({
+            'Month': ['Current', 'Next'],
+            'Amount': [current_debits_v, next_debits_v]
         })
-        st.plotly_chart(px.bar(settled_vs_failed, x='Category', y='Amount', title='Settled vs Failed (MTD)', color='Category'), use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        fig_debits = px.bar(debits_df, x='Month', y='Amount', title='Debits Comparison', color='Month')
+        st.plotly_chart(fig_debits, use_container_width=True)
+    else:
+        debits_df = pd.DataFrame({
+            'Month': ['Selected Month'],
+            'Amount': [current_debits_v]
+        })
+        fig_debits = px.bar(debits_df, x='Month', y='Amount', title='Debits (Single Month)', color='Month')
+        st.plotly_chart(fig_debits, use_container_width=True)
 
-# ---- Row 7: Additional Charts ----
-col1, col2 = st.columns(2)
+priority_counts = combined_priority['Priority Level'].value_counts().reset_index()
+priority_counts.columns = ['Priority', 'Count']
+fig_priority = px.bar(priority_counts, x='Priority', y='Count', title='Priority Queue Distribution', color='Priority')
+st.plotly_chart(fig_priority, use_container_width=True)
 
-with col1:
-    with st.container():
-        st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-        if not single_month_mode:
-            debits_df = pd.DataFrame({
-                'Month': ['Current', 'Next'],
-                'Amount': [current_debits_v, next_debits_v]
-            })
-            st.plotly_chart(px.bar(debits_df, x='Month', y='Amount', title='Debits Comparison', color='Month'), use_container_width=True)
-        else:
-            debits_df = pd.DataFrame({
-                'Month': ['Selected Month'],
-                'Amount': [current_debits_v]
-            })
-            st.plotly_chart(px.bar(debits_df, x='Month', y='Amount', title='Debits (Single Month)', color='Month'), use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+# ================================================================
+# 📈 HISTORICAL TREND CHARTS
+# ================================================================
 
-with col2:
-    with st.container():
-        st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-        if not combined_priority.empty and 'Priority Level' in combined_priority.columns:
-            priority_counts = combined_priority['Priority Level'].value_counts().reset_index()
-            priority_counts.columns = ['Priority', 'Count']
-            st.plotly_chart(px.bar(priority_counts, x='Priority', y='Count', title='Priority Queue Distribution', color='Priority'), use_container_width=True)
-        else:
-            st.info("No priority data available.")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-# ---- Row 8: Historical Trends ----
 history_file = "history/metrics_history.csv"
 os.makedirs(os.path.dirname(history_file), exist_ok=True)
 
@@ -1380,48 +1131,28 @@ if os.path.exists(history_file):
             history_df['report_date'] = pd.to_datetime(history_df['report_date'])
             history_df = history_df.sort_values('report_date')
 
-            st.markdown("""
-            <div style="margin-top: 24px; margin-bottom: 16px;">
-                <h3 style="font-weight: 600; color: #1e1e2d;">📈 Historical Trends</h3>
-            </div>
-            """, unsafe_allow_html=True)
+            st.subheader("📈 Historical Trends")
 
-            col1, col2 = st.columns(2)
-            with col1:
-                with st.container():
-                    st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-                    fig_trend = px.line(history_df, x='report_date', y=['settled_mtd_v', 'failed_mtd_v'],
-                                        title='Monthly Settled vs Failed Amount (R)',
-                                        labels={'value': 'Amount (R)', 'variable': 'Category'})
-                    st.plotly_chart(fig_trend, use_container_width=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
+            fig_trend = px.line(history_df, x='report_date', y=['settled_mtd_v', 'failed_mtd_v'],
+                                title='Monthly Settled vs Failed Amount (R)',
+                                labels={'value': 'Amount (R)', 'variable': 'Category'})
+            st.plotly_chart(fig_trend, use_container_width=True)
 
-            with col2:
-                with st.container():
-                    st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-                    fig_sr = px.line(history_df, x='report_date', y='success_rate',
-                                     title='Success Rate (%) Over Time')
-                    st.plotly_chart(fig_sr, use_container_width=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
+            fig_sr = px.line(history_df, x='report_date', y='success_rate',
+                             title='Success Rate (%) Over Time')
+            st.plotly_chart(fig_sr, use_container_width=True)
 
-            st.markdown('<div class="chart-container">', unsafe_allow_html=True)
             fig_rd = px.line(history_df, x='report_date', y=['revenue_total', 'current_debits_v', 'next_debits_v'],
                              title='Revenue, Current & Next Month Debits',
                              labels={'value': 'Amount (R)', 'variable': 'Category'})
             st.plotly_chart(fig_rd, use_container_width=True)
-            st.markdown('</div>', unsafe_allow_html=True)
         else:
             st.info("📊 Collecting data for historical trends. Come back after more months of data.")
     except:
         pass
 
-# ---- Row 9: Client Lists ----
-st.markdown("""
-<div style="margin-top: 24px; margin-bottom: 16px;">
-    <h3 style="font-weight: 600; color: #1e1e2d;">📱 Export SMS Lists</h3>
-</div>
-""", unsafe_allow_html=True)
-
+# ---- SMS Export ----
+st.subheader("📱 Export SMS Lists")
 col1, col2 = st.columns(2)
 with col1:
     if not failed_sms.empty:
@@ -1436,6 +1167,7 @@ with col2:
     else:
         st.info("No intracking clients to export.")
 
+# ---- Client Lists ----
 st.subheader("📋 Failed Clients (SMS)")
 if not failed_sms.empty:
     st.dataframe(failed_sms, width='stretch')
@@ -1453,11 +1185,11 @@ st.subheader("🔴 Priority Queue")
 if not combined_priority.empty:
     def color_priority(val):
         if val == 'High':
-            return 'background-color: #FF0000; color: white; font-weight: 600;'
+            return 'background-color: #FF0000; color: white'
         elif val == 'Medium':
-            return 'background-color: #FFA500; color: black; font-weight: 600;'
+            return 'background-color: #FFA500; color: black'
         else:
-            return 'background-color: #FFFF00; color: black; font-weight: 600;'
+            return 'background-color: #FFFF00; color: black'
     
     styled_priority = combined_priority.style.map(color_priority, subset=['Priority Level'])
     st.dataframe(styled_priority, width='stretch')
