@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — FINAL (ROBUST PRIORITY QUEUE)
+# 📊 DEBT REVIEW DASHBOARD — FINAL (ROBUST COLUMN HANDLING)
 # ================================================================
 
 import streamlit as st
@@ -559,7 +559,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                        (raw['status'].str.upper().isin(['FAILED', 'TRACKING', 'INTRACKING', 'LATE'])))]
     if not priority_df.empty:
         # Ensure required columns exist
-        for col in ['cell', 'client_name']:
+        for col in ['cell', 'client_name', 'id_number']:
             if col not in priority_df.columns:
                 priority_df[col] = ''
         # Fill NaNs for numeric columns
@@ -638,43 +638,56 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         cols = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level']
         combined_priority = pd.DataFrame(columns=cols)
     
-    # ---- SMS lists ----
+    # ---- SMS lists (ROBUST) ----
+    def ensure_columns(df, required_cols):
+        """Ensure required columns exist in DataFrame, create empty if missing."""
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = ''
+        return df
+    
+    # Failed SMS
     failed_sms = raw[raw['status'].str.upper() == 'FAILED'].copy()
     if not failed_sms.empty:
-        # Ensure required columns exist
-        for col in ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']:
-            if col not in failed_sms.columns:
-                failed_sms[col] = ''
+        ensure_columns(failed_sms, ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status'])
         failed_sms = failed_sms[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']]
         failed_sms.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
     else:
         failed_sms = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
     
+    # Tracking SMS
     tracking_sms = raw[raw['status'].str.upper().isin(['TRACKING', 'INTRACKING'])].copy()
     if not tracking_sms.empty:
-        for col in ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']:
-            if col not in tracking_sms.columns:
-                tracking_sms[col] = ''
+        ensure_columns(tracking_sms, ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status'])
         tracking_sms = tracking_sms[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']]
         tracking_sms.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
     else:
         tracking_sms = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
     
+    # Legacy failed clients (stage 1/2) - ROBUST
     def get_latest_record_for_sheet(df):
         if df.empty:
             return df
+        # Ensure id_number exists
+        if 'id_number' not in df.columns:
+            # try to find an id column
+            id_candidates = [col for col in df.columns if 'id' in col.lower() or 'number' in col.lower()]
+            if id_candidates:
+                df['id_number'] = df[id_candidates[0]]
+            else:
+                df['id_number'] = df.index.astype(str)
         return df.sort_values('collection_date').groupby('id_number').apply(lambda g: g.iloc[-1]).reset_index(drop=True)
     
     failed_clients = raw[raw['status'].str.upper() == 'FAILED'].copy()
     if not failed_clients.empty:
         failed_clients = get_latest_record_for_sheet(failed_clients)
-        if 'cell' not in failed_clients.columns:
-            failed_clients['cell'] = ''
+        ensure_columns(failed_clients, ['id_number', 'client_name', 'cell', 'payment_stage', 'amount'])
         failed_clients = failed_clients[['id_number', 'client_name', 'cell', 'payment_stage', 'amount']]
         failed_clients.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount']
     else:
         failed_clients = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount'])
     
+    # ---- Detail sheets ----
     def prep_detail_df(df, date_col_name, status_col='status'):
         if df.empty:
             return pd.DataFrame()
@@ -682,6 +695,10 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         if date_col_name not in df_out.columns:
             return pd.DataFrame()
         df_out['date_col'] = df_out[date_col_name]
+        # Ensure required columns
+        for col in ['id_number', 'client_name', 'cell', 'payment_stage', 'amount']:
+            if col not in df_out.columns:
+                df_out[col] = ''
         cols_to_keep = ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'date_col']
         if status_col in df_out.columns:
             cols_to_keep.append(status_col)
