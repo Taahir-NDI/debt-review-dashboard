@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — FINAL (PLAIN PRIVATE KEY)
+# 📊 DEBT REVIEW DASHBOARD — FINAL (FIXED BYTESIO)
 # ================================================================
 
 import streamlit as st
@@ -60,7 +60,7 @@ try:
     fee_file_id = st.secrets["FEE_FILE_ID"]
     payment_file_id = st.secrets["PAYMENT_FILE_ID"]
 
-    # Download files
+    # Download files (returns BytesIO objects)
     fee_content = download_file_from_drive(service, fee_file_id)
     payment_content = download_file_from_drive(service, payment_file_id)
 
@@ -194,11 +194,12 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         ref_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today = ref_date
 
-    fee_df_current = pd.read_excel(io.BytesIO(fee_content), sheet_name=current_sheet)
+    # fee_content and payment_content are already BytesIO – use them directly
+    fee_df_current = pd.read_excel(fee_content, sheet_name=current_sheet)
     
     fee_df_next = None
     if not single_month_mode and next_sheet is not None:
-        fee_df_next = pd.read_excel(io.BytesIO(fee_content), sheet_name=next_sheet)
+        fee_df_next = pd.read_excel(fee_content, sheet_name=next_sheet)
     
     future_current = extract_future_debits(fee_df_current, current_sheet, filter_future=True)
     future_next = extract_future_debits(fee_df_next, next_sheet, filter_future=False) if fee_df_next is not None else pd.DataFrame()
@@ -280,12 +281,12 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     fee_base = fee_base.dropna(subset=['id_number', 'payment_stage'])
     
     try:
-        df_pmt = pd.read_excel(io.BytesIO(payment_content), sheet_name='Details', header=3)
+        df_pmt = pd.read_excel(payment_content, sheet_name='Details', header=3)
     except:
         try:
-            df_pmt = pd.read_excel(io.BytesIO(payment_content), header=3)
+            df_pmt = pd.read_excel(payment_content, header=3)
         except:
-            df_pmt = pd.read_excel(io.BytesIO(payment_content))
+            df_pmt = pd.read_excel(payment_content)
     
     raw = df_pmt.copy()
     
@@ -715,7 +716,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
 
 # ---- Detect sheets and handle selection ----
 with st.spinner("⏳ Reading file structure..."):
-    xls = pd.ExcelFile(io.BytesIO(fee_content))
+    # fee_content is already a BytesIO – use it directly
+    xls = pd.ExcelFile(fee_content)
     all_sheets = xls.sheet_names
 
 today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
