@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — CUSTOM DATE RANGES (DEBITS FIXED)
+# 📊 DEBT REVIEW DASHBOARD — CUSTOM DATE RANGES (FINAL FIX)
 # ================================================================
 
 import streamlit as st
@@ -327,25 +327,7 @@ def extract_future_debits(df, sheet_name, filter_future=True):
 # ---- Core processing function (cached) ----
 @st.cache_data
 def process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode=False, ref_date=None, forecast_mode=False, date_range=None):
-    if ref_date is None:
-        ref_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    if isinstance(ref_date, datetime) is False:
-        ref_date = datetime.combine(ref_date, datetime.min.time())
-    today = ref_date
-
-    if date_range:
-        start_dt, end_dt = date_range
-        if isinstance(start_dt, datetime) is False:
-            start_dt = datetime.combine(start_dt, datetime.min.time())
-        if isinstance(end_dt, datetime) is False:
-            end_dt = datetime.combine(end_dt, datetime.max.time())
-        use_custom_range = True
-    else:
-        use_custom_range = False
-        start_dt = None
-        end_dt = None
-
-    # ---- Helper functions ----
+    # ---- Helper functions defined at the top ----
     def get_settled_df(df, start_date=None, end_date=None):
         temp = df[df['status'].str.upper() == 'SETTLED']
         if start_date and end_date:
@@ -383,6 +365,24 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     def get_latest_record(group):
         return group.sort_values('collection_date').iloc[-1]
 
+    if ref_date is None:
+        ref_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    if isinstance(ref_date, datetime) is False:
+        ref_date = datetime.combine(ref_date, datetime.min.time())
+    today = ref_date
+
+    if date_range:
+        start_dt, end_dt = date_range
+        if isinstance(start_dt, datetime) is False:
+            start_dt = datetime.combine(start_dt, datetime.min.time())
+        if isinstance(end_dt, datetime) is False:
+            end_dt = datetime.combine(end_dt, datetime.max.time())
+        use_custom_range = True
+    else:
+        use_custom_range = False
+        start_dt = None
+        end_dt = None
+
     # ---- Read fee audit sheets ----
     fee_df_current = pd.read_excel(fee_content, sheet_name=current_sheet)
     
@@ -394,8 +394,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     future_current = extract_future_debits(fee_df_current, current_sheet, filter_future=True)
     future_next = extract_future_debits(fee_df_next, next_sheet, filter_future=False) if fee_df_next is not None else pd.DataFrame()
     all_future = pd.concat([future_current, future_next], ignore_index=True)
-
-    # ---- For custom range, debits are computed differently later ----
 
     # ---- Status-based data from current sheet ----
     status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col = find_columns(fee_df_current)
@@ -569,12 +567,10 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     
     # ---- Apply date range filtering for status metrics ----
     if use_custom_range:
-        # For status metrics, filter by effective_settlement_date and collection_date
         raw = raw[raw['effective_settlement_date'] >= start_dt]
         raw = raw[raw['effective_settlement_date'] <= end_dt]
         raw = raw[raw['collection_date'] >= start_dt]
         raw = raw[raw['collection_date'] <= end_dt]
-        # For debits (due_date), we will compute separately from fee audit sheets
         today = end_dt
     else:
         raw = raw[raw['collection_date'] <= today]
@@ -713,57 +709,56 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         success_rate = 0
     
     # ---- DEBITS CALCULATION ----
-    # For custom range, compute total due from all rows in the fee audit sheets
     if use_custom_range:
-        # We'll collect all rows from fee_df_current (and fee_df_next if available)
-        # that have a due_date within the range and are not cancelled.
-        # We need to identify the due date column for each sheet.
-        # We already have the column info from find_columns, but we can also use the same.
-        # We'll create a list of dataframes and filter.
-        all_debits_dfs = []
-        # Add current sheet rows (excluding rows that are summaries)
-        # We'll use a similar approach to extract_future_debits but without filtering by status.
+        # ---- Extract all debits from both sheets ----
         def extract_all_debits(df, sheet_name):
             if df is None or df.empty:
                 return pd.DataFrame()
+            # Get column names for this df
             status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col = find_columns(df)
+            if date_col is None:
+                return pd.DataFrame()
             df_temp = df.copy()
+            # Filter out summary rows
             df_temp = df_temp[df_temp[id_col].notna()]
             df_temp = df_temp[df_temp[id_col].astype(str).str.strip() != '']
             df_temp = df_temp[~df_temp[id_col].astype(str).str.upper().str.contains('ID|TOTAL|SUB', na=False)]
-            if date_col is not None:
-                df_temp['due_date'] = pd.to_datetime(df_temp[date_col], errors='coerce')
-            else:
-                df_temp['due_date'] = pd.NaT
+            # Parse date
+            df_temp['due_date'] = pd.to_datetime(df_temp[date_col], errors='coerce')
             df_temp['amount'] = pd.to_numeric(df_temp[amount_col], errors='coerce')
-            # Drop cancelled rows if any
+            # Drop cancelled if status exists
             if status_col in df_temp.columns:
                 cancel_mask = df_temp[status_col].astype(str).str.upper().str.contains('CANCELLED', na=False)
                 df_temp = df_temp[~cancel_mask]
+            # Drop rows without due_date or amount
             df_temp = df_temp.dropna(subset=['due_date', 'amount'])
             df_temp = df_temp[df_temp['amount'] > 0]
+            # Create normalized columns
+            df_temp['id_number'] = df_temp[id_col].astype(str).str.strip()
+            df_temp['client_name'] = df_temp[name_col] if name_col else ''
+            df_temp['cell'] = df_temp[cell_col] if cell_col else ''
+            df_temp['payment_stage'] = pd.to_numeric(df_temp[stage_col], errors='coerce')
+            # Return only needed columns
             return df_temp[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'due_date']]
         
         debits_current = extract_all_debits(fee_df_current, current_sheet)
         debits_next = extract_all_debits(fee_df_next, next_sheet) if fee_df_next is not None else pd.DataFrame()
         all_debits = pd.concat([debits_current, debits_next], ignore_index=True)
-        
         # Filter by date range
         range_debits = all_debits[(all_debits['due_date'] >= start_dt) & (all_debits['due_date'] <= end_dt)]
         current_debits_c = range_debits['id_number'].nunique()
         current_debits_v = range_debits['amount'].sum()
-        # For custom range, we set next_debits to 0 because it's the same period
         next_debits_c = 0
         next_debits_v = 0
-        # We also need to store the range_debits for detail sheets
         range_debits_df = range_debits.copy()
     else:
-        # Normal debit calculation using all_future
+        # Normal debit calculation
         if all_future.empty:
             current_debits_c = 0
             current_debits_v = 0
             next_debits_c = 0
             next_debits_v = 0
+            range_debits_df = pd.DataFrame()
         else:
             tomorrow = today + timedelta(days=1)
             if today.month == 12:
@@ -1362,8 +1357,22 @@ st.markdown("""
 col1, col2 = st.columns(2)
 
 if date_mode == "Custom Range":
-    col1.metric("Total Due in Period", f"R {current_debits_v:,.2f}", f"{current_debits_c} clients")
-    col2.metric("Next Month (N/A)", "N/A", "In custom range")
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card" style="border-left-color: #4e8cff;">
+            <div class="metric-label">Total Due in Period</div>
+            <div class="metric-value">R {current_debits_v:,.2f}</div>
+            <div class="metric-delta">{current_debits_c} clients</div>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"""
+        <div class="metric-card" style="border-left-color: #4e8cff;">
+            <div class="metric-label">Next Month (N/A)</div>
+            <div class="metric-value">N/A</div>
+            <div class="metric-delta">In custom range</div>
+        </div>
+        """, unsafe_allow_html=True)
 else:
     with col1:
         st.markdown(f"""
@@ -1469,8 +1478,235 @@ with col2:
             st.info("No priority data available.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ---- Historical Trends, SMS, etc. (unchanged) ----
-# ... (the rest of the layout remains identical; I'm omitting for brevity but you can copy the remaining code from the previous version)
+# ---- Historical Trends ----
+history_file = "history/metrics_history.csv"
+os.makedirs(os.path.dirname(history_file), exist_ok=True)
 
-# ---- Download Excel ----
-# ... (same as before)
+if single_month_mode:
+    month_name = current_sheet_used
+else:
+    month_name = ref_date_used.strftime('%B %Y')
+
+new_row = {
+    'report_date': ref_date_used.strftime('%Y-%m-%d'),
+    'month': month_name,
+    'settled_mtd_v': settled_mtd_v,
+    'failed_mtd_v': failed_mtd_v,
+    'success_rate': success_rate,
+    'revenue_total': revenue_total,
+    'current_debits_v': current_debits_v,
+    'next_debits_v': next_debits_v,
+    'settled_today_c': settled_today_c,
+    'tracking_c': tracking_c,
+    'failed_cycle_c': failed_cycle_c,
+}
+
+try:
+    if os.path.exists(history_file):
+        history_df = pd.read_csv(history_file)
+        if 'month' in history_df.columns and month_name not in history_df['month'].values:
+            history_df = pd.concat([history_df, pd.DataFrame([new_row])], ignore_index=True)
+        else:
+            idx = history_df[history_df['month'] == month_name].index
+            if len(idx) > 0:
+                history_df.loc[idx[0]] = new_row
+            else:
+                history_df = pd.concat([history_df, pd.DataFrame([new_row])], ignore_index=True)
+    else:
+        history_df = pd.DataFrame([new_row])
+    history_df.to_csv(history_file, index=False)
+except:
+    pass
+
+if os.path.exists(history_file):
+    try:
+        history_df = pd.read_csv(history_file)
+        if len(history_df) > 1:
+            history_df['report_date'] = pd.to_datetime(history_df['report_date'])
+            history_df = history_df.sort_values('report_date')
+
+            st.markdown("""
+            <div style="margin-top: 24px; margin-bottom: 16px;">
+                <h3 style="font-weight: 600; color: #1e1e2d;">📈 Historical Trends</h3>
+            </div>
+            """, unsafe_allow_html=True)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                with st.container():
+                    st.markdown('<div class="chart-container">', unsafe_allow_html=True)
+                    fig_trend = px.line(history_df, x='report_date', y=['settled_mtd_v', 'failed_mtd_v'],
+                                        title='Monthly Settled vs Failed Amount (R)',
+                                        labels={'value': 'Amount (R)', 'variable': 'Category'})
+                    st.plotly_chart(fig_trend, use_container_width=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+            with col2:
+                with st.container():
+                    st.markdown('<div class="chart-container">', unsafe_allow_html=True)
+                    fig_sr = px.line(history_df, x='report_date', y='success_rate',
+                                     title='Success Rate (%) Over Time')
+                    st.plotly_chart(fig_sr, use_container_width=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+            st.markdown('<div class="chart-container">', unsafe_allow_html=True)
+            fig_rd = px.line(history_df, x='report_date', y=['revenue_total', 'current_debits_v', 'next_debits_v'],
+                             title='Revenue, Current & Next Month Debits',
+                             labels={'value': 'Amount (R)', 'variable': 'Category'})
+            st.plotly_chart(fig_rd, use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.info("📊 Collecting data for historical trends. Come back after more months of data.")
+    except:
+        pass
+
+# ---- SMS Export ----
+st.markdown("""
+<div style="margin-top: 24px; margin-bottom: 16px;">
+    <h3 style="font-weight: 600; color: #1e1e2d;">📱 Export SMS Lists</h3>
+</div>
+""", unsafe_allow_html=True)
+
+col1, col2 = st.columns(2)
+with col1:
+    if not failed_sms.empty:
+        csv_failed = failed_sms.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Failed SMS CSV", data=csv_failed, file_name="failed_sms.csv", mime="text/csv")
+    else:
+        st.info("No failed clients to export.")
+with col2:
+    if not tracking_sms.empty:
+        csv_tracking = tracking_sms.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Intracking SMS CSV", data=csv_tracking, file_name="intracking_sms.csv", mime="text/csv")
+    else:
+        st.info("No intracking clients to export.")
+
+st.subheader("📋 Failed Clients (SMS)")
+if not failed_sms.empty:
+    st.dataframe(failed_sms, width='stretch')
+else:
+    st.info("No failed clients.")
+
+st.subheader("📋 Intracking Clients (SMS)")
+if not tracking_sms.empty:
+    st.dataframe(tracking_sms, width='stretch')
+else:
+    st.info("No intracking clients.")
+
+# ---- Priority Queue ----
+st.subheader("🔴 Priority Queue")
+if not combined_priority.empty:
+    def color_priority(val):
+        if val == 'High':
+            return 'background-color: #FF0000; color: white; font-weight: 600;'
+        elif val == 'Medium':
+            return 'background-color: #FFA500; color: black; font-weight: 600;'
+        else:
+            return 'background-color: #FFFF00; color: black; font-weight: 600;'
+    
+    styled_priority = combined_priority.style.map(color_priority, subset=['Priority Level'])
+    st.dataframe(styled_priority, width='stretch')
+else:
+    st.info("No clients in the priority queue.")
+
+# ---- Data Preview ----
+with st.expander("🔍 Data Preview (Debugging)"):
+    st.subheader("Summary")
+    st.write(f"**Total rows after merge:** {len(raw)}")
+    st.write(f"**Rows in stage 1/2:** {len(raw_stage_1_2)}")
+    st.write(f"**Current sheet:** `{current_sheet_used}`")
+    st.write(f"**Next sheet:** `{next_sheet_used if next_sheet_used else 'None'}`")
+    st.write(f"**Unique clients (all):** {raw['id_number'].nunique()}")
+    st.write(f"**Unique clients (stage 1/2):** {raw_stage_1_2['id_number'].nunique() if not raw_stage_1_2.empty else 0}")
+    st.subheader("Sample of Raw Data")
+    st.dataframe(raw.head(10), width='stretch')
+    st.subheader("Future Debits")
+    st.dataframe(all_future.head(10), width='stretch')
+    st.subheader("Status Counts (Stage 1/2)")
+    if not raw_stage_1_2.empty:
+        status_counts = raw_stage_1_2['status'].value_counts().reset_index()
+        status_counts.columns = ['Status', 'Count']
+        st.dataframe(status_counts, width='stretch')
+
+# ---- Download full Excel report ----
+st.subheader("📥 Download Full Excel Report")
+
+def generate_excel():
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        dashboard_data = {
+            'Metric': ['Settled Period (Stage 1/2)', 'Settled Today', 'Settled Period Total',
+                       'Settling (Stage 1/2)', 'Submitted (Stage 1/2)', 'Sub Collect (Stage 1/2)', 'Intracking (Stage 1/2)',
+                       'Curr Month Debits (Stage 1/2)', 'Next Month Debits (Stage 1/2)',
+                       'Failed Period (Stage 1/2)', 'Failed MTD (Stage 1/2)', 'Disputed (Stage 1/2)',
+                       'Revenue Total (Stage 1/2, Period)',
+                       'Success Rate (Period, by value)',
+                       'Single Month Mode'],
+            'Value': [f"{settled_cycle_c} | R{settled_cycle_v:,.2f}",
+                      f"{settled_today_c} | R{settled_today_v:,.2f}",
+                      f"{settled_mtd_c} | R{settled_mtd_v:,.2f}",
+                      f"{settling_c} | R{settling_v:,.2f}",
+                      f"{submitted_c} | R{submitted_v:,.2f}",
+                      f"{sub_col_c} | R{sub_col_v:,.2f}",
+                      f"{tracking_c} | R{tracking_v:,.2f}",
+                      f"{current_debits_c} | R{current_debits_v:,.2f}",
+                      f"{next_debits_c} | R{next_debits_v:,.2f}" if not single_month_mode else "N/A",
+                      f"{failed_cycle_c} | R{failed_cycle_v:,.2f}",
+                      f"{failed_mtd_c} | R{failed_mtd_v:,.2f}",
+                      f"{disputed_c} | R{disputed_v:,.2f}",
+                      f"R{revenue_total:,.2f}",
+                      f"{success_rate:.1f}%",
+                      "Yes" if single_month_mode else "No"]
+        }
+        pd.DataFrame(dashboard_data).to_excel(writer, sheet_name='Dashboard', index=False)
+
+        combined_priority.to_excel(writer, sheet_name='Priority Queue', index=False, header=False)
+        workbook = writer.book
+        worksheet_pq = writer.sheets['Priority Queue']
+        worksheet_pq.set_column('A:A', None, workbook.add_format({'num_format': '@'}))
+
+        format_high = workbook.add_format({'bg_color': '#FF0000', 'font_color': '#FFFFFF', 'bold': True})
+        format_medium = workbook.add_format({'bg_color': '#FFA500', 'font_color': '#000000'})
+        format_low = workbook.add_format({'bg_color': '#FFFF00', 'font_color': '#000000'})
+        last_row_pq = len(combined_priority) + 1
+        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {
+            'type': 'formula',
+            'criteria': f'=$I1="High"',
+            'format': format_high
+        })
+        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {
+            'type': 'formula',
+            'criteria': f'=$I1="Medium"',
+            'format': format_medium
+        })
+        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {
+            'type': 'formula',
+            'criteria': f'=$I1="Low"',
+            'format': format_low
+        })
+
+        failed_clients.to_excel(writer, sheet_name='Failed Clients', index=False)
+        writer.sheets['Failed Clients'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
+
+        failed_sms.to_excel(writer, sheet_name='Failed Clients (SMS)', index=False)
+        writer.sheets['Failed Clients (SMS)'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
+        tracking_sms.to_excel(writer, sheet_name='Intracking Clients (SMS)', index=False)
+        writer.sheets['Intracking Clients (SMS)'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
+
+        for sheet_name, df in detail_dfs.items():
+            if not df.empty:
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+                writer.sheets[sheet_name].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
+
+    output.seek(0)
+    return output
+
+excel_data = generate_excel()
+st.download_button(
+    label="📥 Download Full Excel Report",
+    data=excel_data,
+    file_name=f"Debt_Review_Dashboard_{ref_date_used.strftime('%Y%m%d')}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+st.caption(f"Report generated based on reference date: {date_label}")
