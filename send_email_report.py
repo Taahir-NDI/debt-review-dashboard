@@ -25,8 +25,6 @@ FROM_EMAIL = SMTP_USER
 # ---- Generate Summary Metrics ----
 def generate_summary():
     """Generate key metrics for the email report."""
-    # For this example, we'll read from the history file if it exists
-    # In practice, you would query your database or read the latest dashboard state
     try:
         history_file = "history/metrics_history.csv"
         if os.path.exists(history_file):
@@ -43,7 +41,6 @@ def generate_summary():
                 'failed_cycle_c': latest.get('failed_cycle_c', 0),
             }
         else:
-            # Fallback metrics
             metrics = {
                 'settled_mtd_v': 0,
                 'failed_mtd_v': 0,
@@ -71,6 +68,7 @@ def generate_summary():
 def create_html_body(metrics):
     """Create a styled HTML email body with metrics."""
     today = datetime.now().strftime('%d %B %Y')
+    dashboard_url = os.getenv("DASHBOARD_URL", "https://your-dashboard.streamlit.app")
     
     html = f"""
     <!DOCTYPE html>
@@ -90,6 +88,7 @@ def create_html_body(metrics):
             .footer {{ margin-top: 30px; padding-top: 15px; border-top: 1px solid #dee2e6; font-size: 12px; color: #6c757d; text-align: center; }}
             .green {{ color: #28a745; }}
             .red {{ color: #dc3545; }}
+            .btn {{ display: inline-block; background: #4e8cff; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; margin-top: 10px; }}
         </style>
     </head>
     <body>
@@ -128,9 +127,9 @@ def create_html_body(metrics):
                 </div>
             </div>
             
-            <p style="color: #6c757d; font-size: 13px; margin-top: 10px;">
-                <a href="{os.getenv('DASHBOARD_URL', 'https://your-dashboard.streamlit.app')}">View full dashboard →</a>
-            </p>
+            <div style="text-align: center; margin-top: 15px;">
+                <a href="{dashboard_url}" class="btn">View Full Dashboard →</a>
+            </div>
             
             <div class="footer">
                 Automated report from Debt Review Dashboard · Data refreshed from Google Drive
@@ -152,7 +151,6 @@ def send_email():
     msg['To'] = TO_EMAIL
     msg['Subject'] = f"📊 Debt Review Report - {datetime.now().strftime('%d %b %Y')}"
     
-    # Attach HTML body
     msg.attach(MIMEText(html_body, 'html'))
     
     try:
