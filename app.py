@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — WITH REFERENCE DATE FOR SINGLE MONTH
+# 📊 DEBT REVIEW DASHBOARD — FINAL WITH GCP_CREDENTIALS
 # ================================================================
 
 import streamlit as st
@@ -8,21 +8,54 @@ import numpy as np
 from datetime import datetime, timedelta
 import io
 import warnings
+import os
+import json
 warnings.filterwarnings('ignore')
 import plotly.express as px
+
+# ---- Google Drive imports ----
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 
 # --- Page config ---
 st.set_page_config(page_title="Debt Review Dashboard", layout="wide")
 st.title("📊 Debt Review Operations Dashboard")
 
-# --- Upload section ---
-st.sidebar.header("📂 Upload Files")
-fee_file = st.sidebar.file_uploader("1. Monthly Fees Audit (Excel)", type=["xlsx"])
-payment_file = st.sidebar.file_uploader("2. Payment Status Report (Excel)", type=["xlsx"])
+# ================================================================
+# 1. DOWNLOAD FILES FROM GOOGLE DRIVE
+# ================================================================
 
-# ===== CRITICAL: Stop execution if files are missing =====
-if not fee_file or not payment_file:
-    st.info("👈 Upload both Excel files to start.")
+def download_file_from_drive(service, file_id):
+    """Download a file from Google Drive and return it as a BytesIO object."""
+    request = service.files().get_media(fileId=file_id)
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+    fh.seek(0)
+    return fh
+
+# ---- Google Drive authentication using GCP_CREDENTIALS ----
+try:
+    # Parse the single-line JSON credentials
+    creds_info = json.loads(st.secrets["GCP_CREDENTIALS"])
+    creds = service_account.Credentials.from_service_account_info(creds_info)
+    service = build('drive', 'v3', credentials=creds)
+    
+    # Get file IDs
+    fee_file_id = st.secrets["FEE_FILE_ID"]
+    payment_file_id = st.secrets["PAYMENT_FILE_ID"]
+    
+    # Download files
+    fee_content = download_file_from_drive(service, fee_file_id)
+    payment_content = download_file_from_drive(service, payment_file_id)
+    
+    st.sidebar.success("✅ Connected to Google Drive")
+    
+except Exception as e:
+    st.sidebar.error(f"❌ Error connecting to Google Drive: {e}")
     st.stop()
 
 # ---- Helper functions ----
@@ -145,41 +178,28 @@ def extract_future_debits(df, sheet_name, filter_future=True):
 # ---- Core processing function (cached) ----
 @st.cache_data
 def process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode=False, ref_date=None):
-    """
-    Processes the uploaded files and returns all metrics and dataframes.
-    ref_date: the reference date used for all date calculations.
-    """
     if ref_date is None:
         ref_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    today = ref_date  # use reference date as 'today' for all calculations
+    today = ref_date
 
-    # ---- Read current month sheet ----
     fee_df_current = pd.read_excel(io.BytesIO(fee_content), sheet_name=current_sheet)
     
-    # ---- Read next month sheet only if not single_month_mode ----
     fee_df_next = None
     if not single_month_mode and next_sheet is not None:
         fee_df_next = pd.read_excel(io.BytesIO(fee_content), sheet_name=next_sheet)
     
-    # ---- Extract future debits ----
     future_current = extract_future_debits(fee_df_current, current_sheet, filter_future=True)
     future_next = extract_future_debits(fee_df_next, next_sheet, filter_future=False) if fee_df_next is not None else pd.DataFrame()
     
-    # ---- Combine future debits ----
     all_future = pd.concat([future_current, future_next], ignore_index=True)
 
-    # ---- Calculate debits ----
     if all_future.empty:
         current_debits_c = 0
         current_debits_v = 0
         next_debits_c = 0
         next_debits_v = 0
     else:
-        # Determine date ranges based on reference date
-        # For single month mode, the "current month" is the month of ref_date
-        # For two-month mode, it's the current real month (ref_date is today)
         tomorrow = today + timedelta(days=1)
-        # last day of current month
         if today.month == 12:
             last_day_month = today.replace(year=today.year+1, month=1, day=1) - timedelta(days=1)
         else:
@@ -192,9 +212,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         last_of_next_month = (first_of_next_month + timedelta(days=32)).replace(day=1) - timedelta(days=1)
         
         if single_month_mode:
-            # In single month mode, we only care about debits in the selected month.
-            # The selected month is the month of ref_date. So current month debits are those
-            # with due date in that month (from first to last day).
             first_of_current = today.replace(day=1)
             current_future = all_future[(all_future['due_date'] >= first_of_current) & (all_future['due_date'] <= last_day_month)]
             current_debits_c = current_future['id_number'].nunique()
@@ -202,11 +219,9 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             next_debits_c = 0
             next_debits_v = 0
         else:
-            # Normal two-month mode: current debits from tomorrow to end of current month
             current_future = all_future[(all_future['due_date'] >= tomorrow) & (all_future['due_date'] <= last_day_month)]
             current_debits_c = current_future['id_number'].nunique()
             current_debits_v = current_future['amount'].sum()
-            # next month debits
             if next_sheet is not None:
                 next_future = all_future[(all_future['due_date'] >= first_of_next_month) & (all_future['due_date'] <= last_of_next_month)]
                 next_debits_c = next_future['id_number'].nunique()
@@ -215,7 +230,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                 next_debits_c = 0
                 next_debits_v = 0
     
-    # ---- Status-based data ----
     status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col = find_columns(fee_df_current)
     future_mask_current = fee_df_current[status_col].astype(str).str.upper().str.contains('FUTURE', na=False)
     fee_status_df = fee_df_current[~future_mask_current].copy()
@@ -253,7 +267,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     fee_base['status'] = fee_base['status'].astype(str).str.strip()
     fee_base = fee_base.dropna(subset=['id_number', 'payment_stage'])
     
-    # ---- Read payment report ----
     try:
         df_pmt = pd.read_excel(io.BytesIO(payment_content), sheet_name='Details', header=3)
     except:
@@ -264,7 +277,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     
     raw = df_pmt.copy()
     
-    # ---- Find ID column ----
     payment_id_col = None
     for col in raw.columns:
         if col.strip().upper() == 'ID NUMBER':
@@ -284,7 +296,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         payment_id_col = raw.columns[0]
     raw.rename(columns={payment_id_col: 'id_number'}, inplace=True)
     
-    # ---- Map columns ----
     col_map = {
         'APPLICANT NAME': 'client_name_pmt',
         'CELL': 'cell_pmt',
@@ -306,7 +317,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     raw['id_number'] = raw['id_number'].astype(str).str.strip()
     raw['payment_stage_pmt'] = pd.to_numeric(raw['payment_stage_pmt'], errors='coerce')
     
-    # ---- Left join ----
     pmt_cols = ['id_number', 'payment_stage_pmt', 'collection_date_pmt', 'settlement_date_pmt',
                 'dispute_date_pmt', 'cell_pmt', 'client_name_pmt', 'amount_pmt', 'status_pmt',
                 'total_instalments', 'tracking_days', 'cancelled_date_pmt', 'bank']
@@ -327,7 +337,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     
     merged = fee_base.merge(pmt_data, on=['id_number', 'payment_stage'], how='left')
     
-    # ---- Resolve conflicts ----
     if 'client_name' in merged.columns and 'client_name_pmt' in merged.columns:
         merged['client_name'] = merged['client_name'].fillna(merged['client_name_pmt'])
     elif 'client_name_pmt' in merged.columns:
@@ -359,7 +368,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                  'cancelled_date_pmt']
     merged.drop(columns=[c for c in drop_cols if c in merged.columns], inplace=True, errors='ignore')
     
-    # ---- Drop cancelled ----
     cancelled_keywords = ['cancelled', 'Cancelled', 'CANCELLED', 
                           'RMS - Cancelled', 'RMS - Cancelled - Inactive']
     cancelled_mask = merged['status'].astype(str).str.contains('|'.join(cancelled_keywords), na=False)
@@ -370,7 +378,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     
     raw = merged
     
-    # ---- Convert columns ----
     raw['payment_stage'] = pd.to_numeric(raw['payment_stage'], errors='coerce')
     raw['amount'] = pd.to_numeric(raw['amount'], errors='coerce')
     for col in ['collection_date', 'settlement_date', 'dispute_date', 'cancelled_date']:
@@ -379,14 +386,12 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     raw['due_date'] = raw['collection_date']
     raw['effective_settlement_date'] = raw['settlement_date'].fillna(raw['collection_date'])
     
-    # ---- Filter rows based on reference date ----
     raw = raw[raw['collection_date'] <= today]
     raw = raw[raw['effective_settlement_date'] <= today]
     raw = raw[raw['due_date'] <= today]
     
     raw_stage_1_2 = raw[raw['payment_stage'].isin([1, 2])].copy()
     
-    # ---- Rank settled ----
     settled_all = raw[raw['status'].str.upper() == 'SETTLED'].copy()
     settled_all = settled_all.sort_values(['id_number', 'effective_settlement_date'])
     settled_all['settlement_rank'] = settled_all.groupby('id_number').cumcount() + 1
@@ -398,7 +403,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                                         on=['id_number', 'effective_settlement_date', 'amount', 'status'],
                                         how='left')
     
-    # ---- Revenue constants ----
     RESTRUCTURE_CAP = 8000
     LEGAL_CAP = 8000
     AFTERCARE_CAP = 450
@@ -426,12 +430,10 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     raw['revenue'] = raw.apply(calculate_revenue, axis=1)
     raw_stage_1_2['revenue'] = raw_stage_1_2.apply(calculate_revenue, axis=1)
     
-    # ---- Date ranges ----
     days_since_friday = (today.weekday() - 4) % 7
     last_friday = today - timedelta(days=days_since_friday)
     first_of_month = today.replace(day=1)
     
-    # ---- Metrics ----
     def get_settled_df(df, start_date=None, end_date=None):
         temp = df[df['status'].str.upper() == 'SETTLED']
         if start_date and end_date:
@@ -530,13 +532,11 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     forecast_admin_app = new_clients_est * 350
     forecast_total = forecast_restructuring + forecast_aftercare + forecast_admin_app + forecast_legal
 
-    # ---- Success Rate ----
     if (settled_mtd_v + failed_mtd_v) > 0:
         success_rate = (settled_mtd_v / (settled_mtd_v + failed_mtd_v)) * 100
     else:
         success_rate = 0
     
-    # ---- Priority Queue ----
     def get_latest_record(group):
         return group.sort_values('collection_date').iloc[-1]
     
@@ -588,7 +588,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         tracking_priority
     ], ignore_index=True)
     
-    # ---- SMS lists ----
     failed_sms = raw[raw['status'].str.upper() == 'FAILED'].copy()
     if not failed_sms.empty:
         failed_sms = failed_sms[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']]
@@ -603,7 +602,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     else:
         tracking_sms = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
     
-    # ---- Legacy failed clients ----
     def get_latest_record_for_sheet(df):
         if df.empty:
             return df
@@ -619,7 +617,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     else:
         failed_clients = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount'])
     
-    # ---- Detail sheets ----
     def prep_detail_df(df, date_col_name, status_col='status'):
         if df.empty:
             return pd.DataFrame()
@@ -656,7 +653,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     if not disputed_df.empty:
         detail_dfs['Disputed'] = prep_detail_df(disputed_df, 'collection_date')
     
-    # ---- Return all ----
     return {
         'ref_date': today,
         'current_sheet': current_sheet,
@@ -707,12 +703,9 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
 
 # ---- Detect sheets and handle selection ----
 with st.spinner("⏳ Reading file structure..."):
-    fee_content = fee_file.read()
-    payment_content = payment_file.read()
     xls = pd.ExcelFile(io.BytesIO(fee_content))
     all_sheets = xls.sheet_names
 
-# ---- Auto-detect current and next month ----
 today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 current_month_full = today.strftime('%B %Y').upper()
 current_month_name = today.strftime('%B').upper()
@@ -727,11 +720,10 @@ next_month_name = next_month_date.strftime('%B').upper()
 
 auto_current = find_sheet([current_month_full, current_month_name, current_month_short], all_sheets)
 if auto_current is None:
-    auto_current = all_sheets[0]  # fallback
+    auto_current = all_sheets[0]
 
 auto_next = find_sheet([next_month_full, next_month_name], all_sheets)
 if auto_next is None:
-    # fallback: use any sheet that isn't current and looks like a month
     month_abbrs = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
     for sheet in all_sheets:
         if sheet != auto_current and not any(kw in sheet.upper() for kw in ['SUMMARY','TOTAL','DASHBOARD']):
@@ -739,20 +731,17 @@ if auto_next is None:
                 auto_next = sheet
                 break
 
-# ---- Sidebar selection with defaults ----
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Month Selection")
 
 single_month_mode = st.sidebar.checkbox("📌 Single Month Mode", value=False)
 
-# Current month dropdown
 current_sheet = st.sidebar.selectbox(
     "Current Month Sheet",
     all_sheets,
     index=all_sheets.index(auto_current) if auto_current in all_sheets else 0
 )
 
-# Next month dropdown (auto-suggest based on current selection)
 def get_next_month_sheet(current_sheet_name, all_sheets):
     try:
         parts = current_sheet_name.split()
@@ -762,7 +751,6 @@ def get_next_month_sheet(current_sheet_name, all_sheets):
                 year_str = parts[i+1] if i+1 < len(parts) else None
                 break
         else:
-            # If no month found, fallback to auto_next
             return auto_next
         
         month_names = ['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE','JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER']
@@ -789,12 +777,10 @@ else:
         "Next Month Sheet",
         all_sheets,
         index=all_sheets.index(next_sheet_default) if next_sheet_default in all_sheets else 0,
-        disabled=False  # user can still override
+        disabled=False
     )
 
-# ---- Determine reference date ----
 if single_month_mode:
-    # Parse the current_sheet to get the month/year and set ref_date to last day of that month
     try:
         parts = current_sheet.split()
         month_str = parts[0]
@@ -802,7 +788,6 @@ if single_month_mode:
         month_num = datetime.strptime(month_str, '%B').month
         year = int(year_str)
         ref_date = datetime(year, month_num, 1)
-        # get last day of that month
         if month_num == 12:
             next_month = datetime(year+1, 1, 1)
         else:
@@ -813,13 +798,11 @@ if single_month_mode:
 else:
     ref_date = today
 
-# ---- Process data ----
 result = process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode, ref_date)
 if result is None:
     st.error("❌ No active fee-due clients found. Please check your data.")
     st.stop()
 
-# ---- Unpack results ----
 (
     ref_date_used,
     current_sheet_used,
@@ -1000,6 +983,88 @@ priority_counts = combined_priority['Priority Level'].value_counts().reset_index
 priority_counts.columns = ['Priority', 'Count']
 fig_priority = px.bar(priority_counts, x='Priority', y='Count', title='Priority Queue Distribution', color='Priority')
 st.plotly_chart(fig_priority, use_container_width=True)
+
+# ================================================================
+# 📈 HISTORICAL TREND CHARTS
+# ================================================================
+
+# Save current month's metrics to history
+history_file = "history/metrics_history.csv"
+os.makedirs(os.path.dirname(history_file), exist_ok=True)
+
+# Determine the month name for this report
+if single_month_mode:
+    month_name = current_sheet_used
+else:
+    month_name = ref_date_used.strftime('%B %Y')
+
+new_row = {
+    'report_date': ref_date_used.strftime('%Y-%m-%d'),
+    'month': month_name,
+    'settled_mtd_v': settled_mtd_v,
+    'failed_mtd_v': failed_mtd_v,
+    'success_rate': success_rate,
+    'revenue_total': revenue_total,
+    'current_debits_v': current_debits_v,
+    'next_debits_v': next_debits_v,
+    'settled_today_c': settled_today_c,
+    'tracking_c': tracking_c,
+    'failed_cycle_c': failed_cycle_c,
+}
+
+# Append to CSV
+try:
+    if os.path.exists(history_file):
+        history_df = pd.read_csv(history_file)
+        # Avoid duplicate entries for the same month
+        if 'month' in history_df.columns and month_name not in history_df['month'].values:
+            history_df = pd.concat([history_df, pd.DataFrame([new_row])], ignore_index=True)
+        else:
+            # Update existing row for this month
+            idx = history_df[history_df['month'] == month_name].index
+            if len(idx) > 0:
+                history_df.loc[idx[0]] = new_row
+            else:
+                history_df = pd.concat([history_df, pd.DataFrame([new_row])], ignore_index=True)
+    else:
+        history_df = pd.DataFrame([new_row])
+    
+    history_df.to_csv(history_file, index=False)
+except:
+    # If we can't write to file (e.g., read-only environment), just skip
+    pass
+
+# Load and display history
+if os.path.exists(history_file):
+    try:
+        history_df = pd.read_csv(history_file)
+        if len(history_df) > 1:
+            # Sort by date
+            history_df['report_date'] = pd.to_datetime(history_df['report_date'])
+            history_df = history_df.sort_values('report_date')
+
+            st.subheader("📈 Historical Trends")
+
+            # Chart 1: Settled vs Failed over time
+            fig_trend = px.line(history_df, x='report_date', y=['settled_mtd_v', 'failed_mtd_v'],
+                                title='Monthly Settled vs Failed Amount (R)',
+                                labels={'value': 'Amount (R)', 'variable': 'Category'})
+            st.plotly_chart(fig_trend, use_container_width=True)
+
+            # Chart 2: Success Rate over time
+            fig_sr = px.line(history_df, x='report_date', y='success_rate',
+                             title='Success Rate (%) Over Time')
+            st.plotly_chart(fig_sr, use_container_width=True)
+
+            # Chart 3: Revenue & Debits
+            fig_rd = px.line(history_df, x='report_date', y=['revenue_total', 'current_debits_v', 'next_debits_v'],
+                             title='Revenue, Current & Next Month Debits',
+                             labels={'value': 'Amount (R)', 'variable': 'Category'})
+            st.plotly_chart(fig_rd, use_container_width=True)
+        else:
+            st.info("📊 Collecting data for historical trends. Come back after more months of data.")
+    except:
+        pass
 
 # ---- SMS Export ----
 st.subheader("📱 Export SMS Lists")
