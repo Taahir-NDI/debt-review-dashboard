@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — FINAL (FIXED BYTESIO)
+# 📊 DEBT REVIEW DASHBOARD — FINAL (HANDLES EMPTY DATA)
 # ================================================================
 
 import streamlit as st
@@ -550,6 +550,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     else:
         success_rate = 0
     
+    # ---- Priority Queue (HANDLES EMPTY DATAFRAMES) ----
     def get_latest_record(group):
         return group.sort_values('collection_date').iloc[-1]
     
@@ -559,48 +560,68 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     priority_df = priority_df.copy()
     if 'cell' not in priority_df.columns:
         priority_df['cell'] = ''
-    priority_df = priority_df.sort_values('collection_date').groupby('id_number').apply(get_latest_record).reset_index(drop=True)
     
-    def get_weight(stage):
-        if stage in [1, 2]: return 100
-        if stage == 3: return 90
-        if stage in [4,5,6]: return 60
-        if stage >= 7: return 30
-        return 50
+    if not priority_df.empty:
+        priority_df = priority_df.sort_values('collection_date').groupby('id_number').apply(get_latest_record).reset_index(drop=True)
+        
+        def get_weight(stage):
+            if stage in [1, 2]: return 100
+            if stage == 3: return 90
+            if stage in [4,5,6]: return 60
+            if stage >= 7: return 30
+            return 50
+        
+        priority_df['stage_weight'] = priority_df['payment_stage'].apply(get_weight)
+        priority_df['days_overdue'] = (today - priority_df['due_date']).dt.days.fillna(0)
+        priority_df['priority_score'] = (priority_df['stage_weight'] + priority_df['days_overdue'] * 2)
+        priority_df['Priority Level'] = priority_df['priority_score'].apply(lambda x: 'High' if x >= 150 else ('Medium' if x >= 100 else 'Low'))
+        
+        failed_priority = priority_df[priority_df['status'].str.upper() == 'FAILED'].copy()
+        tracking_priority = priority_df[priority_df['status'].str.upper().isin(['TRACKING', 'INTRACKING'])].copy()
+        
+        failed_priority = failed_priority.sort_values('priority_score', ascending=False)
+        tracking_priority = tracking_priority.sort_values('priority_score', ascending=False)
+        
+        cols = ['id_number', 'client_name', 'cell', 'payment_stage', 'days_overdue', 
+                'amount', 'status', 'priority_score', 'Priority Level']
+        
+        # Only select columns if the DataFrame is not empty
+        if not failed_priority.empty:
+            failed_priority = failed_priority[cols]
+            failed_priority.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 
+                                       'Amount', 'Status', 'Score', 'Priority Level']
+        else:
+            failed_priority = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 
+                                                    'Amount', 'Status', 'Score', 'Priority Level'])
+        
+        if not tracking_priority.empty:
+            tracking_priority = tracking_priority[cols]
+            tracking_priority.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 
+                                         'Amount', 'Status', 'Score', 'Priority Level']
+        else:
+            tracking_priority = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 
+                                                      'Amount', 'Status', 'Score', 'Priority Level'])
+        
+        separator = pd.DataFrame([[''] * len(failed_priority.columns)], columns=failed_priority.columns)
+        header_failed = pd.DataFrame([['=== FAILED PAYMENTS ==='] + [''] * (len(failed_priority.columns)-1)], 
+                                      columns=failed_priority.columns)
+        header_tracking = pd.DataFrame([['=== TRACKING / INTRACKING CLIENTS ==='] + [''] * (len(failed_priority.columns)-1)], 
+                                        columns=failed_priority.columns)
+        
+        combined_priority = pd.concat([
+            header_failed,
+            failed_priority,
+            separator,
+            header_tracking,
+            tracking_priority
+        ], ignore_index=True)
+    else:
+        # No priority clients at all
+        cols = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level']
+        combined_priority = pd.DataFrame(columns=cols)
+        st.info("ℹ️ No clients in the priority queue.")
     
-    priority_df['stage_weight'] = priority_df['payment_stage'].apply(get_weight)
-    priority_df['days_overdue'] = (today - priority_df['due_date']).dt.days.fillna(0)
-    priority_df['priority_score'] = (priority_df['stage_weight'] + priority_df['days_overdue'] * 2)
-    priority_df['Priority Level'] = priority_df['priority_score'].apply(lambda x: 'High' if x >= 150 else ('Medium' if x >= 100 else 'Low'))
-    
-    failed_priority = priority_df[priority_df['status'].str.upper() == 'FAILED'].copy()
-    tracking_priority = priority_df[priority_df['status'].str.upper().isin(['TRACKING', 'INTRACKING'])].copy()
-    failed_priority = failed_priority.sort_values('priority_score', ascending=False)
-    tracking_priority = tracking_priority.sort_values('priority_score', ascending=False)
-    
-    cols = ['id_number', 'client_name', 'cell', 'payment_stage', 'days_overdue', 
-            'amount', 'status', 'priority_score', 'Priority Level']
-    failed_priority = failed_priority[cols]
-    tracking_priority = tracking_priority[cols]
-    failed_priority.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 
-                               'Amount', 'Status', 'Score', 'Priority Level']
-    tracking_priority.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 
-                                 'Amount', 'Status', 'Score', 'Priority Level']
-    
-    separator = pd.DataFrame([[''] * len(failed_priority.columns)], columns=failed_priority.columns)
-    header_failed = pd.DataFrame([['=== FAILED PAYMENTS ==='] + [''] * (len(failed_priority.columns)-1)], 
-                                  columns=failed_priority.columns)
-    header_tracking = pd.DataFrame([['=== TRACKING / INTRACKING CLIENTS ==='] + [''] * (len(failed_priority.columns)-1)], 
-                                    columns=failed_priority.columns)
-    
-    combined_priority = pd.concat([
-        header_failed,
-        failed_priority,
-        separator,
-        header_tracking,
-        tracking_priority
-    ], ignore_index=True)
-    
+    # ---- SMS lists ----
     failed_sms = raw[raw['status'].str.upper() == 'FAILED'].copy()
     if not failed_sms.empty:
         failed_sms = failed_sms[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']]
@@ -1104,16 +1125,19 @@ else:
 
 # ---- Priority Queue ----
 st.subheader("🔴 Priority Queue")
-def color_priority(val):
-    if val == 'High':
-        return 'background-color: #FF0000; color: white'
-    elif val == 'Medium':
-        return 'background-color: #FFA500; color: black'
-    else:
-        return 'background-color: #FFFF00; color: black'
-
-styled_priority = combined_priority.style.applymap(color_priority, subset=['Priority Level'])
-st.dataframe(styled_priority, use_container_width=True)
+if not combined_priority.empty:
+    def color_priority(val):
+        if val == 'High':
+            return 'background-color: #FF0000; color: white'
+        elif val == 'Medium':
+            return 'background-color: #FFA500; color: black'
+        else:
+            return 'background-color: #FFFF00; color: black'
+    
+    styled_priority = combined_priority.style.applymap(color_priority, subset=['Priority Level'])
+    st.dataframe(styled_priority, use_container_width=True)
+else:
+    st.info("No clients in the priority queue.")
 
 # ---- Data Preview ----
 with st.expander("🔍 Data Preview (Debugging)"):
