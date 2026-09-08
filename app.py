@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — FINAL (ROBUST COLUMN HANDLING)
+# 📊 DEBT REVIEW DASHBOARD — WITH FORECAST MODE (FIXED)
 # ================================================================
 
 import streamlit as st
@@ -37,6 +37,26 @@ def download_file_from_drive(service, file_id):
     fh.seek(0)
     return fh
 
+# ---- Sidebar: File upload & options ----
+st.sidebar.markdown("---")
+st.sidebar.subheader("📂 Data Source")
+
+# ---- Forecast Mode toggle ----
+forecast_mode = st.sidebar.checkbox("📌 Forecast Mode (Fee Audit only)", value=False)
+
+if forecast_mode:
+    st.sidebar.info("ℹ️ Using only Fees Audit. Payment Report ignored.")
+    # Only need Fee Audit file
+    fee_file = st.sidebar.file_uploader("Monthly Fees Audit (Excel)", type=["xlsx"])
+    payment_file = None
+else:
+    fee_file = st.sidebar.file_uploader("1. Monthly Fees Audit (Excel)", type=["xlsx"])
+    payment_file = st.sidebar.file_uploader("2. Payment Status Report (Excel)", type=["xlsx"])
+
+if not fee_file:
+    st.info("👈 Upload the Fees Audit file to start.")
+    st.stop()
+
 # ---- Google Drive authentication ----
 try:
     # Build credentials dict from individual secrets
@@ -58,11 +78,15 @@ try:
 
     # Get file IDs
     fee_file_id = st.secrets["FEE_FILE_ID"]
-    payment_file_id = st.secrets["PAYMENT_FILE_ID"]
+    if not forecast_mode:
+        payment_file_id = st.secrets["PAYMENT_FILE_ID"]
 
-    # Download files (returns BytesIO objects)
+    # Download files
     fee_content = download_file_from_drive(service, fee_file_id)
-    payment_content = download_file_from_drive(service, payment_file_id)
+    if not forecast_mode:
+        payment_content = download_file_from_drive(service, payment_file_id)
+    else:
+        payment_content = None
 
     st.sidebar.success("✅ Connected to Google Drive")
 
@@ -189,12 +213,12 @@ def extract_future_debits(df, sheet_name, filter_future=True):
 
 # ---- Core processing function (cached) ----
 @st.cache_data
-def process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode=False, ref_date=None):
+def process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode=False, ref_date=None, forecast_mode=False):
     if ref_date is None:
         ref_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today = ref_date
 
-    # fee_content and payment_content are already BytesIO – use them directly
+    # fee_content is already a BytesIO – use it directly
     fee_df_current = pd.read_excel(fee_content, sheet_name=current_sheet)
     
     fee_df_next = None
@@ -243,6 +267,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                 next_debits_c = 0
                 next_debits_v = 0
     
+    # ---- Status-based data from Fee Audit ----
     status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col = find_columns(fee_df_current)
     future_mask_current = fee_df_current[status_col].astype(str).str.upper().str.contains('FUTURE', na=False)
     fee_status_df = fee_df_current[~future_mask_current].copy()
@@ -280,117 +305,133 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     fee_base['status'] = fee_base['status'].astype(str).str.strip()
     fee_base = fee_base.dropna(subset=['id_number', 'payment_stage'])
     
-    try:
-        df_pmt = pd.read_excel(payment_content, sheet_name='Details', header=3)
-    except:
+    # ---- If forecast_mode, skip payment report entirely ----
+    if forecast_mode:
+        raw = fee_base.copy()
+        # Ensure required columns exist
+        for col in ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status', 'collection_date']:
+            if col not in raw.columns:
+                raw[col] = '' if col in ['client_name', 'cell', 'status'] else 0
+        # Also need due_date and effective_settlement_date
+        raw['due_date'] = raw['collection_date']
+        raw['effective_settlement_date'] = raw['collection_date']
+        # No payment data to merge – we are done with raw
+    else:
+        # ---- Read payment report ----
         try:
-            df_pmt = pd.read_excel(payment_content, header=3)
+            df_pmt = pd.read_excel(payment_content, sheet_name='Details', header=3)
         except:
-            df_pmt = pd.read_excel(payment_content)
-    
-    raw = df_pmt.copy()
-    
-    payment_id_col = None
-    for col in raw.columns:
-        if col.strip().upper() == 'ID NUMBER':
-            payment_id_col = col
-            break
-    if payment_id_col is None:
-        for col in raw.columns:
-            if col.strip().upper() == 'APPLICANT NUMBER':
+            try:
+                df_pmt = pd.read_excel(payment_content, header=3)
+            except:
+                df_pmt = pd.read_excel(payment_content)
+        
+        raw_pmt = df_pmt.copy()
+        
+        payment_id_col = None
+        for col in raw_pmt.columns:
+            if col.strip().upper() == 'ID NUMBER':
                 payment_id_col = col
                 break
-    if payment_id_col is None:
-        for col in raw.columns:
-            if any(kw in str(col).lower() for kw in ['id', 'applicant', 'number']):
-                payment_id_col = col
-                break
-    if payment_id_col is None:
-        payment_id_col = raw.columns[0]
-    raw.rename(columns={payment_id_col: 'id_number'}, inplace=True)
+        if payment_id_col is None:
+            for col in raw_pmt.columns:
+                if col.strip().upper() == 'APPLICANT NUMBER':
+                    payment_id_col = col
+                    break
+        if payment_id_col is None:
+            for col in raw_pmt.columns:
+                if any(kw in str(col).lower() for kw in ['id', 'applicant', 'number']):
+                    payment_id_col = col
+                    break
+        if payment_id_col is None:
+            payment_id_col = raw_pmt.columns[0]
+        raw_pmt.rename(columns={payment_id_col: 'id_number'}, inplace=True)
+        
+        col_map = {
+            'APPLICANT NAME': 'client_name_pmt',
+            'CELL': 'cell_pmt',
+            'INSTALLMENT NO': 'payment_stage_pmt',
+            'TOTAL INSTALMENTS LOADED': 'total_instalments',
+            'INSTALMENT AMOUNT': 'amount_pmt',
+            'COLLECTION STATUS': 'status_pmt',
+            'COLLECTION DATE': 'collection_date_pmt',
+            'SETTLEMENT DATE': 'settlement_date_pmt',
+            'DISPUTE DATE': 'dispute_date_pmt',
+            'Tracking Days Used': 'tracking_days',
+            'Cancelled Date': 'cancelled_date_pmt',
+            'Mandate Consumer Bank': 'bank'
+        }
+        for old, new in col_map.items():
+            if old in raw_pmt.columns:
+                raw_pmt.rename(columns={old: new}, inplace=True)
+        
+        raw_pmt['id_number'] = raw_pmt['id_number'].astype(str).str.strip()
+        raw_pmt['payment_stage_pmt'] = pd.to_numeric(raw_pmt['payment_stage_pmt'], errors='coerce')
+        
+        pmt_cols = ['id_number', 'payment_stage_pmt', 'collection_date_pmt', 'settlement_date_pmt',
+                    'dispute_date_pmt', 'cell_pmt', 'client_name_pmt', 'amount_pmt', 'status_pmt',
+                    'total_instalments', 'tracking_days', 'cancelled_date_pmt', 'bank']
+        pmt_cols_existing = [c for c in pmt_cols if c in raw_pmt.columns]
+        pmt_data = raw_pmt[pmt_cols_existing].copy()
+        pmt_data = pmt_data.drop_duplicates(subset=['id_number', 'payment_stage_pmt'], keep='first')
+        pmt_data.rename(columns={
+            'payment_stage_pmt': 'payment_stage',
+            'collection_date_pmt': 'collection_date_pmt',
+            'settlement_date_pmt': 'settlement_date_pmt',
+            'dispute_date_pmt': 'dispute_date_pmt',
+            'cell_pmt': 'cell_pmt',
+            'client_name_pmt': 'client_name_pmt',
+            'amount_pmt': 'amount_pmt',
+            'status_pmt': 'status_pmt',
+            'cancelled_date_pmt': 'cancelled_date_pmt'
+        }, inplace=True)
+        
+        merged = fee_base.merge(pmt_data, on=['id_number', 'payment_stage'], how='left')
+        
+        # Resolve conflicts: use fee_base values if available, otherwise payment report
+        if 'client_name' in merged.columns and 'client_name_pmt' in merged.columns:
+            merged['client_name'] = merged['client_name'].fillna(merged['client_name_pmt'])
+        elif 'client_name_pmt' in merged.columns:
+            merged['client_name'] = merged['client_name_pmt']
+        if 'cell' in merged.columns and 'cell_pmt' in merged.columns:
+            merged['cell'] = merged['cell'].fillna(merged['cell_pmt'])
+        elif 'cell_pmt' in merged.columns:
+            merged['cell'] = merged['cell_pmt']
+        if 'collection_date' in merged.columns and 'collection_date_pmt' in merged.columns:
+            merged['collection_date'] = merged['collection_date'].fillna(merged['collection_date_pmt'])
+        elif 'collection_date_pmt' in merged.columns:
+            merged['collection_date'] = merged['collection_date_pmt']
+        
+        if 'settlement_date_pmt' in merged.columns:
+            merged['settlement_date'] = merged['settlement_date_pmt']
+        else:
+            merged['settlement_date'] = pd.NaT
+        if 'dispute_date_pmt' in merged.columns:
+            merged['dispute_date'] = merged['dispute_date_pmt']
+        else:
+            merged['dispute_date'] = pd.NaT
+        if 'cancelled_date_pmt' in merged.columns:
+            merged['cancelled_date'] = merged['cancelled_date_pmt']
+        else:
+            merged['cancelled_date'] = pd.NaT
+        
+        drop_cols = ['client_name_pmt', 'cell_pmt', 'amount_pmt', 'status_pmt', 
+                     'collection_date_pmt', 'settlement_date_pmt', 'dispute_date_pmt',
+                     'cancelled_date_pmt']
+        merged.drop(columns=[c for c in drop_cols if c in merged.columns], inplace=True, errors='ignore')
+        
+        # Drop cancelled
+        cancelled_keywords = ['cancelled', 'Cancelled', 'CANCELLED', 
+                              'RMS - Cancelled', 'RMS - Cancelled - Inactive']
+        cancelled_mask = merged['status'].astype(str).str.contains('|'.join(cancelled_keywords), na=False)
+        merged = merged[~cancelled_mask].copy()
+        
+        if merged.empty:
+            return None
+        
+        raw = merged
     
-    col_map = {
-        'APPLICANT NAME': 'client_name_pmt',
-        'CELL': 'cell_pmt',
-        'INSTALLMENT NO': 'payment_stage_pmt',
-        'TOTAL INSTALMENTS LOADED': 'total_instalments',
-        'INSTALMENT AMOUNT': 'amount_pmt',
-        'COLLECTION STATUS': 'status_pmt',
-        'COLLECTION DATE': 'collection_date_pmt',
-        'SETTLEMENT DATE': 'settlement_date_pmt',
-        'DISPUTE DATE': 'dispute_date_pmt',
-        'Tracking Days Used': 'tracking_days',
-        'Cancelled Date': 'cancelled_date_pmt',
-        'Mandate Consumer Bank': 'bank'
-    }
-    for old, new in col_map.items():
-        if old in raw.columns:
-            raw.rename(columns={old: new}, inplace=True)
-    
-    raw['id_number'] = raw['id_number'].astype(str).str.strip()
-    raw['payment_stage_pmt'] = pd.to_numeric(raw['payment_stage_pmt'], errors='coerce')
-    
-    pmt_cols = ['id_number', 'payment_stage_pmt', 'collection_date_pmt', 'settlement_date_pmt',
-                'dispute_date_pmt', 'cell_pmt', 'client_name_pmt', 'amount_pmt', 'status_pmt',
-                'total_instalments', 'tracking_days', 'cancelled_date_pmt', 'bank']
-    pmt_cols_existing = [c for c in pmt_cols if c in raw.columns]
-    pmt_data = raw[pmt_cols_existing].copy()
-    pmt_data = pmt_data.drop_duplicates(subset=['id_number', 'payment_stage_pmt'], keep='first')
-    pmt_data.rename(columns={
-        'payment_stage_pmt': 'payment_stage',
-        'collection_date_pmt': 'collection_date_pmt',
-        'settlement_date_pmt': 'settlement_date_pmt',
-        'dispute_date_pmt': 'dispute_date_pmt',
-        'cell_pmt': 'cell_pmt',
-        'client_name_pmt': 'client_name_pmt',
-        'amount_pmt': 'amount_pmt',
-        'status_pmt': 'status_pmt',
-        'cancelled_date_pmt': 'cancelled_date_pmt'
-    }, inplace=True)
-    
-    merged = fee_base.merge(pmt_data, on=['id_number', 'payment_stage'], how='left')
-    
-    if 'client_name' in merged.columns and 'client_name_pmt' in merged.columns:
-        merged['client_name'] = merged['client_name'].fillna(merged['client_name_pmt'])
-    elif 'client_name_pmt' in merged.columns:
-        merged['client_name'] = merged['client_name_pmt']
-    if 'cell' in merged.columns and 'cell_pmt' in merged.columns:
-        merged['cell'] = merged['cell'].fillna(merged['cell_pmt'])
-    elif 'cell_pmt' in merged.columns:
-        merged['cell'] = merged['cell_pmt']
-    if 'collection_date' in merged.columns and 'collection_date_pmt' in merged.columns:
-        merged['collection_date'] = merged['collection_date'].fillna(merged['collection_date_pmt'])
-    elif 'collection_date_pmt' in merged.columns:
-        merged['collection_date'] = merged['collection_date_pmt']
-    
-    if 'settlement_date_pmt' in merged.columns:
-        merged['settlement_date'] = merged['settlement_date_pmt']
-    else:
-        merged['settlement_date'] = pd.NaT
-    if 'dispute_date_pmt' in merged.columns:
-        merged['dispute_date'] = merged['dispute_date_pmt']
-    else:
-        merged['dispute_date'] = pd.NaT
-    if 'cancelled_date_pmt' in merged.columns:
-        merged['cancelled_date'] = merged['cancelled_date_pmt']
-    else:
-        merged['cancelled_date'] = pd.NaT
-    
-    drop_cols = ['client_name_pmt', 'cell_pmt', 'amount_pmt', 'status_pmt', 
-                 'collection_date_pmt', 'settlement_date_pmt', 'dispute_date_pmt',
-                 'cancelled_date_pmt']
-    merged.drop(columns=[c for c in drop_cols if c in merged.columns], inplace=True, errors='ignore')
-    
-    cancelled_keywords = ['cancelled', 'Cancelled', 'CANCELLED', 
-                          'RMS - Cancelled', 'RMS - Cancelled - Inactive']
-    cancelled_mask = merged['status'].astype(str).str.contains('|'.join(cancelled_keywords), na=False)
-    merged = merged[~cancelled_mask].copy()
-    
-    if merged.empty:
-        return None
-    
-    raw = merged
-    
+    # ---- Continue processing (same for both modes) ----
     raw['payment_stage'] = pd.to_numeric(raw['payment_stage'], errors='coerce')
     raw['amount'] = pd.to_numeric(raw['amount'], errors='coerce')
     for col in ['collection_date', 'settlement_date', 'dispute_date', 'cancelled_date']:
@@ -874,7 +915,7 @@ if single_month_mode:
 else:
     ref_date = today
 
-result = process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode, ref_date)
+result = process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode, ref_date, forecast_mode)
 if result is None:
     st.error("❌ No active fee-due clients found. Please check your data.")
     st.stop()
@@ -984,6 +1025,8 @@ if single_month_mode:
     st.sidebar.write(f"**Single Month Mode:** On (ref: {ref_date_used.strftime('%B %Y')})")
 else:
     st.sidebar.write("**Single Month Mode:** Off")
+if forecast_mode:
+    st.sidebar.info("🔮 Forecast Mode active – data from Fee Audit only")
 
 # ---- KPIs ----
 col1, col2, col3, col4 = st.columns(4)
@@ -1154,13 +1197,13 @@ with col2:
 # ---- Client Lists ----
 st.subheader("📋 Failed Clients (SMS)")
 if not failed_sms.empty:
-    st.dataframe(failed_sms, use_container_width=True)
+    st.dataframe(failed_sms, width='stretch')
 else:
     st.info("No failed clients.")
 
 st.subheader("📋 Intracking Clients (SMS)")
 if not tracking_sms.empty:
-    st.dataframe(tracking_sms, use_container_width=True)
+    st.dataframe(tracking_sms, width='stretch')
 else:
     st.info("No intracking clients.")
 
@@ -1175,8 +1218,9 @@ if not combined_priority.empty:
         else:
             return 'background-color: #FFFF00; color: black'
     
-    styled_priority = combined_priority.style.applymap(color_priority, subset=['Priority Level'])
-    st.dataframe(styled_priority, use_container_width=True)
+    # Use .map instead of .applymap (deprecated)
+    styled_priority = combined_priority.style.map(color_priority, subset=['Priority Level'])
+    st.dataframe(styled_priority, width='stretch')
 else:
     st.info("No clients in the priority queue.")
 
@@ -1190,14 +1234,14 @@ with st.expander("🔍 Data Preview (Debugging)"):
     st.write(f"**Unique clients (all):** {raw['id_number'].nunique()}")
     st.write(f"**Unique clients (stage 1/2):** {raw_stage_1_2['id_number'].nunique() if not raw_stage_1_2.empty else 0}")
     st.subheader("Sample of Raw Data")
-    st.dataframe(raw.head(10))
+    st.dataframe(raw.head(10), width='stretch')
     st.subheader("Future Debits")
-    st.dataframe(all_future.head(10))
+    st.dataframe(all_future.head(10), width='stretch')
     st.subheader("Status Counts (Stage 1/2)")
     if not raw_stage_1_2.empty:
         status_counts = raw_stage_1_2['status'].value_counts().reset_index()
         status_counts.columns = ['Status', 'Count']
-        st.dataframe(status_counts)
+        st.dataframe(status_counts, width='stretch')
 
 # ---- Download full Excel report ----
 st.subheader("📥 Download Full Excel Report")
