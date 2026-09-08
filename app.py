@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — FINAL (BASE64 PRIVATE KEY)
+# 📊 DEBT REVIEW DASHBOARD — FINAL (PLAIN PRIVATE KEY)
 # ================================================================
 
 import streamlit as st
@@ -10,7 +10,6 @@ import io
 import warnings
 import os
 import json
-import base64
 warnings.filterwarnings('ignore')
 import plotly.express as px
 
@@ -38,14 +37,14 @@ def download_file_from_drive(service, file_id):
     fh.seek(0)
     return fh
 
-# ---- Google Drive authentication using base64 encoded private key ----
+# ---- Google Drive authentication ----
 try:
-    # Build credentials dict from individual secrets, decode base64 private key
+    # Build credentials dict from individual secrets
     creds_info = {
         "type": "service_account",
         "project_id": st.secrets["PROJECT_ID"],
         "private_key_id": st.secrets["PRIVATE_KEY_ID"],
-        "private_key": base64.b64decode(st.secrets["PRIVATE_KEY_B64"]).decode('utf-8'),
+        "private_key": st.secrets["PRIVATE_KEY"],
         "client_email": st.secrets["CLIENT_EMAIL"],
         "client_id": st.secrets["CLIENT_ID"],
         "auth_uri": st.secrets["AUTH_URI"],
@@ -56,17 +55,17 @@ try:
     }
     creds = service_account.Credentials.from_service_account_info(creds_info)
     service = build('drive', 'v3', credentials=creds)
-    
+
     # Get file IDs
     fee_file_id = st.secrets["FEE_FILE_ID"]
     payment_file_id = st.secrets["PAYMENT_FILE_ID"]
-    
+
     # Download files
     fee_content = download_file_from_drive(service, fee_file_id)
     payment_content = download_file_from_drive(service, payment_file_id)
-    
+
     st.sidebar.success("✅ Connected to Google Drive")
-    
+
 except Exception as e:
     st.sidebar.error(f"❌ Error connecting to Google Drive: {e}")
     st.stop()
