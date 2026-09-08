@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — WITH CUSTOM DATE RANGES
+# 📊 DEBT REVIEW DASHBOARD — CUSTOM DATE RANGES (FIXED)
 # ================================================================
 
 import streamlit as st
@@ -333,7 +333,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     # Determine start and end dates for filtering
     if date_range:
         start_date, end_date = date_range
-        # Convert to datetime
         if isinstance(start_date, datetime):
             start_dt = start_date
         else:
@@ -348,6 +347,45 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         start_dt = None
         end_dt = None
 
+    # ---- Helper functions defined at the top for safety ----
+    def get_settled_df(df, start_date=None, end_date=None):
+        temp = df[df['status'].str.upper() == 'SETTLED']
+        if start_date and end_date:
+            temp = temp[temp['effective_settlement_date'] >= start_date]
+            temp = temp[temp['effective_settlement_date'] <= end_date]
+        return temp
+
+    def get_failed_df(df, start_date=None, end_date=None):
+        temp = df[df['status'].str.upper() == 'FAILED']
+        if start_date and end_date:
+            temp = temp[temp['collection_date'] >= start_date]
+            temp = temp[temp['collection_date'] <= end_date]
+        return temp
+
+    def get_unique_stage_clients(df, status_filter=None, date_col=None, start_date=None, end_date=None):
+        temp = df.copy()
+        if status_filter:
+            temp = temp[temp['status'].str.upper() == status_filter.upper()]
+        if date_col and start_date and end_date:
+            temp = temp[temp[date_col] >= start_date]
+            temp = temp[temp[date_col] <= end_date]
+        if not temp.empty:
+            grouped = temp.groupby('id_number').agg({
+                'client_name': 'first',
+                'cell': 'first',
+                'payment_stage': 'first',
+                'amount': 'sum',
+                'status': 'first',
+                'collection_date': 'max'
+            }).reset_index()
+            return grouped
+        else:
+            return pd.DataFrame()
+
+    def get_latest_record(group):
+        return group.sort_values('collection_date').iloc[-1]
+
+    # ---- Read fee audit sheets ----
     fee_df_current = pd.read_excel(fee_content, sheet_name=current_sheet)
     
     fee_df_next = None
@@ -567,17 +605,13 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     # ---- Apply date range filtering ----
     if use_custom_range:
         # Filter data based on custom start and end dates
-        # For settlement, use effective_settlement_date
         raw = raw[raw['effective_settlement_date'] >= start_dt]
         raw = raw[raw['effective_settlement_date'] <= end_dt]
-        # For debits, use due_date
         raw = raw[raw['due_date'] >= start_dt]
         raw = raw[raw['due_date'] <= end_dt]
-        # Also filter by collection_date
         raw = raw[raw['collection_date'] >= start_dt]
         raw = raw[raw['collection_date'] <= end_dt]
-        # Override today to be end_date for metric calculations
-        today = end_dt
+        today = end_dt  # Override today to end_date for metric calculations
     else:
         raw = raw[raw['collection_date'] <= today]
         raw = raw[raw['effective_settlement_date'] <= today]
@@ -627,49 +661,11 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     last_friday = today - timedelta(days=days_since_friday)
     first_of_month = today.replace(day=1)
     
-    def get_settled_df(df, start_date=None, end_date=None):
-        temp = df[df['status'].str.upper() == 'SETTLED']
-        if start_date and end_date:
-            temp = temp[temp['effective_settlement_date'] >= start_date]
-            temp = temp[temp['effective_settlement_date'] <= end_date]
-        return temp
-    
-    # For custom ranges, use the custom start/end dates for metrics
+    # ---- Metrics using helper functions ----
     if use_custom_range:
         settled_today_df = get_settled_df(raw_stage_1_2, end_dt, end_dt)
         settled_cycle_df = get_settled_df(raw_stage_1_2, start_dt, end_dt)
         settled_mtd_df = get_settled_df(raw_stage_1_2, start_dt, end_dt)
-    else:
-        settled_today_df = get_settled_df(raw_stage_1_2, today, today)
-        settled_cycle_df = get_settled_df(raw_stage_1_2, last_friday, today)
-        settled_mtd_df = get_settled_df(raw_stage_1_2, first_of_month, today)
-    
-    settled_today_c, settled_today_v = len(settled_today_df), settled_today_df['amount'].sum()
-    settled_cycle_c, settled_cycle_v = len(settled_cycle_df), settled_cycle_df['amount'].sum()
-    settled_mtd_c, settled_mtd_v = len(settled_mtd_df), settled_mtd_df['amount'].sum()
-    
-    def get_unique_stage_clients(df, status_filter=None, date_col=None, start_date=None, end_date=None):
-        temp = df.copy()
-        if status_filter:
-            temp = temp[temp['status'].str.upper() == status_filter.upper()]
-        if date_col and start_date and end_date:
-            temp = temp[temp[date_col] >= start_date]
-            temp = temp[temp[date_col] <= end_date]
-        if not temp.empty:
-            grouped = temp.groupby('id_number').agg({
-                'client_name': 'first',
-                'cell': 'first',
-                'payment_stage': 'first',
-                'amount': 'sum',
-                'status': 'first',
-                'collection_date': 'max'
-            }).reset_index()
-            return grouped
-        else:
-            return pd.DataFrame()
-    
-    # For custom ranges, use start/end for in-progress metrics
-    if use_custom_range:
         settling_df = get_unique_stage_clients(raw_stage_1_2, 'Settling', 'collection_date', start_dt, end_dt)
         submitted_df = get_unique_stage_clients(raw_stage_1_2, 'Submitted', 'collection_date', start_dt, end_dt)
         sub_col_df = get_unique_stage_clients(raw_stage_1_2, 'Submitting Collection', 'collection_date', start_dt, end_dt)
@@ -687,6 +683,9 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             (raw_stage_1_2['effective_settlement_date'] <= end_dt)
         ]
     else:
+        settled_today_df = get_settled_df(raw_stage_1_2, today, today)
+        settled_cycle_df = get_settled_df(raw_stage_1_2, last_friday, today)
+        settled_mtd_df = get_settled_df(raw_stage_1_2, first_of_month, today)
         settling_df = get_unique_stage_clients(raw_stage_1_2, 'Settling')
         submitted_df = get_unique_stage_clients(raw_stage_1_2, 'Submitted')
         sub_col_df = get_unique_stage_clients(raw_stage_1_2, 'Submitting Collection')
@@ -712,21 +711,15 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     else:
         tracking_df = pd.DataFrame()
     
+    settled_today_c, settled_today_v = len(settled_today_df), settled_today_df['amount'].sum()
+    settled_cycle_c, settled_cycle_v = len(settled_cycle_df), settled_cycle_df['amount'].sum()
+    settled_mtd_c, settled_mtd_v = len(settled_mtd_df), settled_mtd_df['amount'].sum()
     settling_c, settling_v = len(settling_df), settling_df['amount'].sum() if not settling_df.empty else 0
     submitted_c, submitted_v = len(submitted_df), submitted_df['amount'].sum() if not submitted_df.empty else 0
     sub_col_c, sub_col_v = len(sub_col_df), sub_col_df['amount'].sum() if not sub_col_df.empty else 0
     tracking_c, tracking_v = len(tracking_df), tracking_df['amount'].sum() if not tracking_df.empty else 0
-    
-    def get_failed_df(df, start_date=None, end_date=None):
-        temp = df[df['status'].str.upper() == 'FAILED']
-        if start_date and end_date:
-            temp = temp[temp['collection_date'] >= start_date]
-            temp = temp[temp['collection_date'] <= end_date]
-        return temp
-    
     failed_cycle_c, failed_cycle_v = len(failed_cycle_df), failed_cycle_df['amount'].sum()
     failed_mtd_c, failed_mtd_v = len(failed_mtd_df), failed_mtd_df['amount'].sum()
-    
     disputed_c, disputed_v = len(disputed_df), disputed_df['amount'].sum() if not disputed_df.empty else 0
     
     revenue_total = current_month_settled['revenue'].sum()
@@ -756,9 +749,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         success_rate = 0
     
     # ---- Priority Queue ----
-    def get_latest_record(group):
-        return group.sort_values('collection_date').iloc[-1]
-    
     priority_df = raw[(raw['status'].str.upper().isin(['FAILED', 'TRACKING', 'INTRACKING'])) | 
                       ((raw['payment_stage'].isin([1,2,3])) & 
                        (raw['status'].str.upper().isin(['FAILED', 'TRACKING', 'INTRACKING', 'LATE'])))]
@@ -1051,9 +1041,8 @@ if single_month_mode:
 else:
     ref_date = today
 
-# If custom date range is selected, use it instead of ref_date
+# Call process_data with correct arguments
 if date_mode == "Custom Range":
-    # We'll use ref_date as end_date for processing, but pass date_range separately
     result = process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode, end_date, forecast_mode, (start_date, end_date))
 else:
     result = process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode, ref_date, forecast_mode)
@@ -1157,7 +1146,7 @@ if result is None:
 )
 
 # ================================================================
-# 3. DASHBOARD LAYOUT (Styled)
+# 3. DASHBOARD LAYOUT (Styled) – Unchanged
 # ================================================================
 
 # Determine date range label for display
