@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — STYLED FINANCE DASHBOARD (FIXED CSS)
+# 📊 DEBT REVIEW DASHBOARD — STREAMLIT DEFAULT COLOURS
 # ================================================================
 
 import streamlit as st
@@ -19,39 +19,12 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 # ================================================================
-# 0. CUSTOM STYLES (CSS) — Fixed for light main content
+# 0. CUSTOM STYLES (CSS) — Only boxes, no background overrides
 # ================================================================
 st.set_page_config(page_title="Debt Review Dashboard", layout="wide")
 
 st.markdown("""
 <style>
-    /* --- MAIN CONTENT: light background, dark text --- */
-    .stApp {
-        background-color: #f8f9fa !important;
-    }
-    .main .block-container {
-        background-color: #ffffff !important;
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
-    /* --- SIDEBAR: dark background, white text --- */
-    [data-testid="stSidebar"] {
-        background-color: #1e1e2d !important;
-        color: #fff !important;
-    }
-    [data-testid="stSidebar"] .st-emotion-cache-6qob1r {
-        background-color: #1e1e2d !important;
-    }
-    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3,
-    [data-testid="stSidebar"] .st-emotion-cache-1v0mbdj {
-        color: #fff !important;
-    }
-    [data-testid="stSidebar"] .st-emotion-cache-1wivap2 {
-        color: #fff !important;
-    }
-    [data-testid="stSidebar"] .st-emotion-cache-1h7hqzo {
-        color: #a0a0a0 !important;
-    }
     /* --- Metric Cards --- */
     .metric-card {
         background-color: #ffffff;
@@ -143,9 +116,9 @@ st.markdown("""
 # 1. SIDEBAR – OPTIONS
 # ================================================================
 st.sidebar.markdown("""
-<div style="padding: 10px 0 20px 0; text-align: center; color: #fff;">
-    <h3 style="color: #fff;">📊 Debt Review</h3>
-    <p style="color: #a0a0a0; font-size: 14px;">Operations Dashboard</p>
+<div style="padding: 10px 0 20px 0; text-align: center; color: #1e1e2d;">
+    <h3 style="color: #1e1e2d;">📊 Debt Review</h3>
+    <p style="color: #6c757d; font-size: 14px;">Operations Dashboard</p>
 </div>
 """, unsafe_allow_html=True)
 
