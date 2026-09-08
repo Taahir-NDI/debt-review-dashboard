@@ -19,23 +19,30 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 # ================================================================
-# 0. CUSTOM STYLES (CSS) — Updated with robust selectors
+# 0. CUSTOM STYLES (CSS) — Fixed for light main content
 # ================================================================
 st.set_page_config(page_title="Debt Review Dashboard", layout="wide")
 
 st.markdown("""
 <style>
-    /* --- SIDEBAR --- */
+    /* --- MAIN CONTENT: light background, dark text --- */
+    .stApp {
+        background-color: #f8f9fa !important;
+    }
+    .main .block-container {
+        background-color: #ffffff !important;
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+    /* --- SIDEBAR: dark background, white text --- */
     [data-testid="stSidebar"] {
-        background-color: #1e1e2d;
-        color: #fff;
-    }
-    [data-testid="stSidebar"] .st-emotion-cache-6qob1r {
-        background-color: #1e1e2d;
-    }
-    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+        background-color: #1e1e2d !important;
         color: #fff !important;
     }
+    [data-testid="stSidebar"] .st-emotion-cache-6qob1r {
+        background-color: #1e1e2d !important;
+    }
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3,
     [data-testid="stSidebar"] .st-emotion-cache-1v0mbdj {
         color: #fff !important;
     }
