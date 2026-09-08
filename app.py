@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — WITH FORECAST MODE (FIXED)
+# 📊 DEBT REVIEW DASHBOARD — FORECAST MODE (DRIVE AUTO‑PULL)
 # ================================================================
 
 import streamlit as st
@@ -23,7 +23,21 @@ st.set_page_config(page_title="Debt Review Dashboard", layout="wide")
 st.title("📊 Debt Review Operations Dashboard")
 
 # ================================================================
-# 1. DOWNLOAD FILES FROM GOOGLE DRIVE
+# 1. SIDEBAR – OPTIONS
+# ================================================================
+st.sidebar.markdown("---")
+st.sidebar.subheader("📅 Month Selection")
+
+single_month_mode = st.sidebar.checkbox("📌 Single Month Mode", value=False)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔮 Forecast Mode")
+forecast_mode = st.sidebar.checkbox("📌 Forecast Mode (Fee Audit only)", value=False)
+if forecast_mode:
+    st.sidebar.info("ℹ️ Using only Fees Audit. Payment Report ignored.")
+
+# ================================================================
+# 2. GOOGLE DRIVE AUTHENTICATION & DOWNLOAD
 # ================================================================
 
 def download_file_from_drive(service, file_id):
@@ -37,29 +51,8 @@ def download_file_from_drive(service, file_id):
     fh.seek(0)
     return fh
 
-# ---- Sidebar: File upload & options ----
-st.sidebar.markdown("---")
-st.sidebar.subheader("📂 Data Source")
-
-# ---- Forecast Mode toggle ----
-forecast_mode = st.sidebar.checkbox("📌 Forecast Mode (Fee Audit only)", value=False)
-
-if forecast_mode:
-    st.sidebar.info("ℹ️ Using only Fees Audit. Payment Report ignored.")
-    # Only need Fee Audit file
-    fee_file = st.sidebar.file_uploader("Monthly Fees Audit (Excel)", type=["xlsx"])
-    payment_file = None
-else:
-    fee_file = st.sidebar.file_uploader("1. Monthly Fees Audit (Excel)", type=["xlsx"])
-    payment_file = st.sidebar.file_uploader("2. Payment Status Report (Excel)", type=["xlsx"])
-
-if not fee_file:
-    st.info("👈 Upload the Fees Audit file to start.")
-    st.stop()
-
-# ---- Google Drive authentication ----
 try:
-    # Build credentials dict from individual secrets
+    # Build credentials from individual secrets (same as before)
     creds_info = {
         "type": "service_account",
         "project_id": st.secrets["PROJECT_ID"],
@@ -76,7 +69,7 @@ try:
     creds = service_account.Credentials.from_service_account_info(creds_info)
     service = build('drive', 'v3', credentials=creds)
 
-    # Get file IDs
+    # Get file IDs from secrets
     fee_file_id = st.secrets["FEE_FILE_ID"]
     if not forecast_mode:
         payment_file_id = st.secrets["PAYMENT_FILE_ID"]
@@ -312,10 +305,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         for col in ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status', 'collection_date']:
             if col not in raw.columns:
                 raw[col] = '' if col in ['client_name', 'cell', 'status'] else 0
-        # Also need due_date and effective_settlement_date
         raw['due_date'] = raw['collection_date']
         raw['effective_settlement_date'] = raw['collection_date']
-        # No payment data to merge – we are done with raw
     else:
         # ---- Read payment report ----
         try:
@@ -388,7 +379,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         
         merged = fee_base.merge(pmt_data, on=['id_number', 'payment_stage'], how='left')
         
-        # Resolve conflicts: use fee_base values if available, otherwise payment report
         if 'client_name' in merged.columns and 'client_name_pmt' in merged.columns:
             merged['client_name'] = merged['client_name'].fillna(merged['client_name_pmt'])
         elif 'client_name_pmt' in merged.columns:
@@ -420,7 +410,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                      'cancelled_date_pmt']
         merged.drop(columns=[c for c in drop_cols if c in merged.columns], inplace=True, errors='ignore')
         
-        # Drop cancelled
         cancelled_keywords = ['cancelled', 'Cancelled', 'CANCELLED', 
                               'RMS - Cancelled', 'RMS - Cancelled - Inactive']
         cancelled_mask = merged['status'].astype(str).str.contains('|'.join(cancelled_keywords), na=False)
@@ -599,14 +588,11 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                       ((raw['payment_stage'].isin([1,2,3])) & 
                        (raw['status'].str.upper().isin(['FAILED', 'TRACKING', 'INTRACKING', 'LATE'])))]
     if not priority_df.empty:
-        # Ensure required columns exist
         for col in ['cell', 'client_name', 'id_number']:
             if col not in priority_df.columns:
                 priority_df[col] = ''
-        # Fill NaNs for numeric columns
         priority_df['amount'] = priority_df['amount'].fillna(0)
         priority_df['payment_stage'] = priority_df['payment_stage'].fillna(0)
-        # Ensure due_date exists
         if 'due_date' not in priority_df.columns:
             priority_df['due_date'] = pd.NaT
         
@@ -620,7 +606,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             return 50
         
         priority_df['stage_weight'] = priority_df['payment_stage'].apply(get_weight)
-        # Calculate days overdue safely
         if 'due_date' in priority_df.columns:
             priority_df['days_overdue'] = (today - priority_df['due_date']).dt.days.fillna(0)
         else:
@@ -628,22 +613,18 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         priority_df['priority_score'] = priority_df['stage_weight'] + priority_df['days_overdue'] * 2
         priority_df['Priority Level'] = priority_df['priority_score'].apply(lambda x: 'High' if x >= 150 else ('Medium' if x >= 100 else 'Low'))
         
-        # Define columns to keep
         cols = ['id_number', 'client_name', 'cell', 'payment_stage', 'days_overdue', 
                 'amount', 'status', 'priority_score', 'Priority Level']
-        # Ensure all columns exist
         for col in cols:
             if col not in priority_df.columns:
-                priority_df[col] = ''  # or 0 for numeric
+                priority_df[col] = ''
         
         failed_priority = priority_df[priority_df['status'].str.upper() == 'FAILED'].copy()
         tracking_priority = priority_df[priority_df['status'].str.upper().isin(['TRACKING', 'INTRACKING'])].copy()
         
-        # Sort
         failed_priority = failed_priority.sort_values('priority_score', ascending=False)
         tracking_priority = tracking_priority.sort_values('priority_score', ascending=False)
         
-        # Rename columns for display
         if not failed_priority.empty:
             failed_priority = failed_priority[cols]
             failed_priority.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 
@@ -660,7 +641,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             tracking_priority = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 
                                                       'Amount', 'Status', 'Score', 'Priority Level'])
         
-        # Create combined with headers
         separator = pd.DataFrame([[''] * len(failed_priority.columns)], columns=failed_priority.columns)
         header_failed = pd.DataFrame([['=== FAILED PAYMENTS ==='] + [''] * (len(failed_priority.columns)-1)], 
                                       columns=failed_priority.columns)
@@ -675,19 +655,16 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             tracking_priority
         ], ignore_index=True)
     else:
-        # No priority clients at all
         cols = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level']
         combined_priority = pd.DataFrame(columns=cols)
     
     # ---- SMS lists (ROBUST) ----
     def ensure_columns(df, required_cols):
-        """Ensure required columns exist in DataFrame, create empty if missing."""
         for col in required_cols:
             if col not in df.columns:
                 df[col] = ''
         return df
     
-    # Failed SMS
     failed_sms = raw[raw['status'].str.upper() == 'FAILED'].copy()
     if not failed_sms.empty:
         ensure_columns(failed_sms, ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status'])
@@ -696,7 +673,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     else:
         failed_sms = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
     
-    # Tracking SMS
     tracking_sms = raw[raw['status'].str.upper().isin(['TRACKING', 'INTRACKING'])].copy()
     if not tracking_sms.empty:
         ensure_columns(tracking_sms, ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status'])
@@ -705,13 +681,10 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     else:
         tracking_sms = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
     
-    # Legacy failed clients (stage 1/2) - ROBUST
     def get_latest_record_for_sheet(df):
         if df.empty:
             return df
-        # Ensure id_number exists
         if 'id_number' not in df.columns:
-            # try to find an id column
             id_candidates = [col for col in df.columns if 'id' in col.lower() or 'number' in col.lower()]
             if id_candidates:
                 df['id_number'] = df[id_candidates[0]]
@@ -728,7 +701,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     else:
         failed_clients = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount'])
     
-    # ---- Detail sheets ----
     def prep_detail_df(df, date_col_name, status_col='status'):
         if df.empty:
             return pd.DataFrame()
@@ -736,7 +708,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         if date_col_name not in df_out.columns:
             return pd.DataFrame()
         df_out['date_col'] = df_out[date_col_name]
-        # Ensure required columns
         for col in ['id_number', 'client_name', 'cell', 'payment_stage', 'amount']:
             if col not in df_out.columns:
                 df_out[col] = ''
@@ -819,7 +790,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
 
 # ---- Detect sheets and handle selection ----
 with st.spinner("⏳ Reading file structure..."):
-    # fee_content is already a BytesIO – use it directly
     xls = pd.ExcelFile(fee_content)
     all_sheets = xls.sheet_names
 
@@ -847,11 +817,6 @@ if auto_next is None:
             if any(abbr in sheet.upper() for abbr in month_abbrs):
                 auto_next = sheet
                 break
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("📅 Month Selection")
-
-single_month_mode = st.sidebar.checkbox("📌 Single Month Mode", value=False)
 
 current_sheet = st.sidebar.selectbox(
     "Current Month Sheet",
@@ -1107,11 +1072,9 @@ st.plotly_chart(fig_priority, use_container_width=True)
 # 📈 HISTORICAL TREND CHARTS
 # ================================================================
 
-# Save current month's metrics to history
 history_file = "history/metrics_history.csv"
 os.makedirs(os.path.dirname(history_file), exist_ok=True)
 
-# Determine the month name for this report
 if single_month_mode:
     month_name = current_sheet_used
 else:
@@ -1131,7 +1094,6 @@ new_row = {
     'failed_cycle_c': failed_cycle_c,
 }
 
-# Append to CSV
 try:
     if os.path.exists(history_file):
         history_df = pd.read_csv(history_file)
@@ -1145,12 +1107,10 @@ try:
                 history_df = pd.concat([history_df, pd.DataFrame([new_row])], ignore_index=True)
     else:
         history_df = pd.DataFrame([new_row])
-    
     history_df.to_csv(history_file, index=False)
 except:
     pass
 
-# Load and display history
 if os.path.exists(history_file):
     try:
         history_df = pd.read_csv(history_file)
@@ -1218,7 +1178,6 @@ if not combined_priority.empty:
         else:
             return 'background-color: #FFFF00; color: black'
     
-    # Use .map instead of .applymap (deprecated)
     styled_priority = combined_priority.style.map(color_priority, subset=['Priority Level'])
     st.dataframe(styled_priority, width='stretch')
 else:
