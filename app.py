@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — CUSTOM DATE RANGES (FIXED)
+# 📊 DEBT REVIEW DASHBOARD — CUSTOM DATE RANGES (FINAL)
 # ================================================================
 
 import streamlit as st
@@ -139,17 +139,22 @@ date_mode = st.sidebar.radio(
 )
 
 if date_mode == "Custom Range":
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    start_date = st.sidebar.date_input("Start Date", today - timedelta(days=30))
-    end_date = st.sidebar.date_input("End Date", today)
+    today_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start_date = st.sidebar.date_input("Start Date", today_date - timedelta(days=30))
+    end_date = st.sidebar.date_input("End Date", today_date)
     if start_date > end_date:
         st.sidebar.error("Start date must be before end date.")
         st.stop()
-    ref_date = end_date
-    date_range = (start_date, end_date)
+    # Convert to datetime objects for processing
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    end_dt = datetime.combine(end_date, datetime.max.time())
+    ref_date = end_dt  # use as reference
+    date_range = (start_dt, end_dt)
 else:
     ref_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    date_range = None  # Will use default date logic (today-based)
+    start_dt = None
+    end_dt = None
+    date_range = None
 
 # ================================================================
 # 2. GOOGLE DRIVE AUTHENTICATION & DOWNLOAD
@@ -206,7 +211,7 @@ if drive_connected:
 else:
     st.warning("⚠️ Not connected to Google Drive")
 
-# ---- Helper functions (unchanged) ----
+# ---- Helper functions ----
 def find_sheet(variants, all_sheets):
     for sheet in all_sheets:
         sheet_upper = sheet.upper()
@@ -328,19 +333,19 @@ def extract_future_debits(df, sheet_name, filter_future=True):
 def process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode=False, ref_date=None, forecast_mode=False, date_range=None):
     if ref_date is None:
         ref_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    # Ensure ref_date is a datetime (convert if it's a date)
+    if isinstance(ref_date, datetime) is False:
+        ref_date = datetime.combine(ref_date, datetime.min.time())
     today = ref_date
 
     # Determine start and end dates for filtering
     if date_range:
-        start_date, end_date = date_range
-        if isinstance(start_date, datetime):
-            start_dt = start_date
-        else:
-            start_dt = datetime.combine(start_date, datetime.min.time())
-        if isinstance(end_date, datetime):
-            end_dt = end_date
-        else:
-            end_dt = datetime.combine(end_date, datetime.max.time())
+        start_dt, end_dt = date_range
+        # Ensure they are datetimes
+        if isinstance(start_dt, datetime) is False:
+            start_dt = datetime.combine(start_dt, datetime.min.time())
+        if isinstance(end_dt, datetime) is False:
+            end_dt = datetime.combine(end_dt, datetime.max.time())
         use_custom_range = True
     else:
         use_custom_range = False
@@ -611,7 +616,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         raw = raw[raw['due_date'] <= end_dt]
         raw = raw[raw['collection_date'] >= start_dt]
         raw = raw[raw['collection_date'] <= end_dt]
-        today = end_dt  # Override today to end_date for metric calculations
+        # Override today to end_date for metric calculations (use end_dt as reference)
+        today = end_dt
     else:
         raw = raw[raw['collection_date'] <= today]
         raw = raw[raw['effective_settlement_date'] <= today]
@@ -1041,9 +1047,10 @@ if single_month_mode:
 else:
     ref_date = today
 
-# Call process_data with correct arguments
+# ---- Call process_data with correct arguments ----
 if date_mode == "Custom Range":
-    result = process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode, end_date, forecast_mode, (start_date, end_date))
+    # Use end_dt (datetime) as ref_date, and pass date_range as datetimes
+    result = process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode, end_dt, forecast_mode, date_range)
 else:
     result = process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode, ref_date, forecast_mode)
 
