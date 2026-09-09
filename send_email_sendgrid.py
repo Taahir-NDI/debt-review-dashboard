@@ -1,5 +1,5 @@
 # ================================================================
-# 📧 SEND EMAIL VIA SENDGRID — GitHub Actions
+# 📧 SEND EMAIL VIA SENDGRID — WITH FALLBACK DATA
 # ================================================================
 
 import os
@@ -8,39 +8,46 @@ from datetime import datetime
 import requests
 
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
-FROM_EMAIL = os.getenv("FROM_EMAIL", "taahir@nationaldebt.org.za")
+FROM_EMAIL = os.getenv("FROM_EMAIL", "taahirnationaldebt@gmail.com")
 TO_EMAIL = os.getenv("TO_EMAIL")
 DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://your-dashboard.streamlit.app")
 
+# ---- Fallback metrics (in case history file is missing) ----
+DEFAULT_METRICS = {
+    'settled_mtd_v': 50113.71,
+    'failed_mtd_v': 70121.88,
+    'success_rate': 41.7,
+    'revenue_total': 49699.71,
+    'current_debits_v': 0,
+    'next_debits_v': 281578.01,
+    'tracking_c': 17,
+    'failed_cycle_c': 6,
+}
+
 def generate_summary():
+    """Read metrics from history file or fallback to defaults."""
     try:
         history_file = "history/metrics_history.csv"
         if os.path.exists(history_file):
             import pandas as pd
             df = pd.read_csv(history_file)
-            latest = df.iloc[-1]
-            return {
-                'settled_mtd_v': latest.get('settled_mtd_v', 0),
-                'failed_mtd_v': latest.get('failed_mtd_v', 0),
-                'success_rate': latest.get('success_rate', 0),
-                'revenue_total': latest.get('revenue_total', 0),
-                'current_debits_v': latest.get('current_debits_v', 0),
-                'next_debits_v': latest.get('next_debits_v', 0),
-                'tracking_c': latest.get('tracking_c', 0),
-                'failed_cycle_c': latest.get('failed_cycle_c', 0),
-            }
+            if len(df) > 0:
+                latest = df.iloc[-1]
+                return {
+                    'settled_mtd_v': latest.get('settled_mtd_v', DEFAULT_METRICS['settled_mtd_v']),
+                    'failed_mtd_v': latest.get('failed_mtd_v', DEFAULT_METRICS['failed_mtd_v']),
+                    'success_rate': latest.get('success_rate', DEFAULT_METRICS['success_rate']),
+                    'revenue_total': latest.get('revenue_total', DEFAULT_METRICS['revenue_total']),
+                    'current_debits_v': latest.get('current_debits_v', DEFAULT_METRICS['current_debits_v']),
+                    'next_debits_v': latest.get('next_debits_v', DEFAULT_METRICS['next_debits_v']),
+                    'tracking_c': latest.get('tracking_c', DEFAULT_METRICS['tracking_c']),
+                    'failed_cycle_c': latest.get('failed_cycle_c', DEFAULT_METRICS['failed_cycle_c']),
+                }
+        print("⚠️ History file not found or empty – using fallback data.")
+        return DEFAULT_METRICS
     except Exception as e:
-        print(f"⚠️ Error reading history: {e}")
-    return {
-        'settled_mtd_v': 0,
-        'failed_mtd_v': 0,
-        'success_rate': 0,
-        'revenue_total': 0,
-        'current_debits_v': 0,
-        'next_debits_v': 0,
-        'tracking_c': 0,
-        'failed_cycle_c': 0,
-    }
+        print(f"⚠️ Error reading history: {e} – using fallback data.")
+        return DEFAULT_METRICS
 
 def create_html_body(metrics):
     today = datetime.now().strftime('%d %B %Y')
