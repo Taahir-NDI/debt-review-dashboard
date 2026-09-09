@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — CUSTOM DATE RANGES (FINAL FIX)
+# 📊 DEBT REVIEW DASHBOARD — FOLDER ID METHOD (NO MORE FILE ID UPDATES)
 # ================================================================
 
 import streamlit as st
@@ -155,7 +155,7 @@ else:
     date_range = None
 
 # ================================================================
-# 2. GOOGLE DRIVE AUTHENTICATION & DOWNLOAD
+# 2. GOOGLE DRIVE AUTHENTICATION & DOWNLOAD (FOLDER ID METHOD)
 # ================================================================
 
 def download_file_from_drive(service, file_id):
@@ -167,6 +167,16 @@ def download_file_from_drive(service, file_id):
         status, done = downloader.next_chunk()
     fh.seek(0)
     return fh
+
+def get_file_id_from_folder(service, folder_id, file_name):
+    """Find a file by name inside a Google Drive folder."""
+    query = f"'{folder_id}' in parents and name = '{file_name}' and trashed = false"
+    results = service.files().list(q=query, fields="files(id, name)").execute()
+    files = results.get('files', [])
+    if files:
+        return files[0]['id']
+    else:
+        raise Exception(f"File '{file_name}' not found in folder.")
 
 drive_connected = False
 try:
@@ -186,12 +196,16 @@ try:
     creds = service_account.Credentials.from_service_account_info(creds_info)
     service = build('drive', 'v3', credentials=creds)
 
-    fee_file_id = st.secrets["FEE_FILE_ID"]
+    folder_id = st.secrets["FOLDER_ID"]
+    
+    fee_file_id = get_file_id_from_folder(service, folder_id, "Monthly Fees Audit.xlsx")
     if not forecast_mode:
-        payment_file_id = st.secrets["PAYMENT_FILE_ID"]
+        payment_file_id = get_file_id_from_folder(service, folder_id, "Payment Status Report.xlsx")
+    else:
+        payment_file_id = None
 
     fee_content = download_file_from_drive(service, fee_file_id)
-    if not forecast_mode:
+    if not forecast_mode and payment_file_id is not None:
         payment_content = download_file_from_drive(service, payment_file_id)
     else:
         payment_content = None
@@ -710,41 +724,32 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     
     # ---- DEBITS CALCULATION ----
     if use_custom_range:
-        # ---- Extract all debits from both sheets ----
         def extract_all_debits(df, sheet_name):
             if df is None or df.empty:
                 return pd.DataFrame()
-            # Get column names for this df
             status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col = find_columns(df)
             if date_col is None:
                 return pd.DataFrame()
             df_temp = df.copy()
-            # Filter out summary rows
             df_temp = df_temp[df_temp[id_col].notna()]
             df_temp = df_temp[df_temp[id_col].astype(str).str.strip() != '']
             df_temp = df_temp[~df_temp[id_col].astype(str).str.upper().str.contains('ID|TOTAL|SUB', na=False)]
-            # Parse date
             df_temp['due_date'] = pd.to_datetime(df_temp[date_col], errors='coerce')
             df_temp['amount'] = pd.to_numeric(df_temp[amount_col], errors='coerce')
-            # Drop cancelled if status exists
             if status_col in df_temp.columns:
                 cancel_mask = df_temp[status_col].astype(str).str.upper().str.contains('CANCELLED', na=False)
                 df_temp = df_temp[~cancel_mask]
-            # Drop rows without due_date or amount
             df_temp = df_temp.dropna(subset=['due_date', 'amount'])
             df_temp = df_temp[df_temp['amount'] > 0]
-            # Create normalized columns
             df_temp['id_number'] = df_temp[id_col].astype(str).str.strip()
             df_temp['client_name'] = df_temp[name_col] if name_col else ''
             df_temp['cell'] = df_temp[cell_col] if cell_col else ''
             df_temp['payment_stage'] = pd.to_numeric(df_temp[stage_col], errors='coerce')
-            # Return only needed columns
             return df_temp[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'due_date']]
         
         debits_current = extract_all_debits(fee_df_current, current_sheet)
         debits_next = extract_all_debits(fee_df_next, next_sheet) if fee_df_next is not None else pd.DataFrame()
         all_debits = pd.concat([debits_current, debits_next], ignore_index=True)
-        # Filter by date range
         range_debits = all_debits[(all_debits['due_date'] >= start_dt) & (all_debits['due_date'] <= end_dt)]
         current_debits_c = range_debits['id_number'].nunique()
         current_debits_v = range_debits['amount'].sum()
@@ -752,7 +757,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         next_debits_v = 0
         range_debits_df = range_debits.copy()
     else:
-        # Normal debit calculation
         if all_future.empty:
             current_debits_c = 0
             current_debits_v = 0
