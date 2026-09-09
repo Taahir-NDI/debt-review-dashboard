@@ -379,6 +379,13 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     def get_latest_record(group):
         return group.sort_values('collection_date').iloc[-1]
 
+    # ---- ADD MISSING ensure_columns function ----
+    def ensure_columns(df, required_cols):
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = ''
+        return df
+
     if ref_date is None:
         ref_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     if isinstance(ref_date, datetime) is False:
