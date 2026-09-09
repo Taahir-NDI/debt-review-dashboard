@@ -18,8 +18,27 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-# ---- SMS imports ----
-from sms_provider import GenericSMSProvider   # Change to AfricaTalking / Twilio if needed
+# ================================================================
+# 📱 SMS PROVIDER — Embedded (Generic HTTP API)
+# ================================================================
+import requests
+
+class GenericSMSProvider:
+    def __init__(self, api_url, api_key, from_number):
+        self.api_url = api_url
+        self.api_key = api_key
+        self.from_number = from_number
+
+    def send(self, to_number, message):
+        """Send an SMS to a single recipient via HTTP API."""
+        payload = {
+            "api_key": self.api_key,
+            "from": self.from_number,
+            "to": to_number,
+            "message": message
+        }
+        response = requests.post(self.api_url, json=payload)
+        return response.json()
 
 # ================================================================
 # 0. CUSTOM STYLES (CSS) — Only boxes, no background overrides
@@ -1161,19 +1180,16 @@ def send_sms(to_number, message, provider_type="generic"):
                 st.secrets["SMS_FROM_NUMBER"]
             )
         elif provider_type == "africastalking":
-            from sms_provider import AfricaTalking
-            provider = AfricaTalking(
-                st.secrets["SMS_USERNAME"],
-                st.secrets["SMS_API_KEY"],
-                st.secrets["SMS_FROM_NUMBER"]
-            )
+            # If you use Africa's Talking, uncomment and import the class
+            # from sms_provider import AfricaTalking
+            # provider = AfricaTalking(
+            #     st.secrets["SMS_USERNAME"],
+            #     st.secrets["SMS_API_KEY"],
+            #     st.secrets["SMS_FROM_NUMBER"]
+            # )
+            raise NotImplementedError("Africa's Talking provider not embedded; please add the class.")
         elif provider_type == "twilio":
-            from sms_provider import TwilioProvider
-            provider = TwilioProvider(
-                st.secrets["TWILIO_ACCOUNT_SID"],
-                st.secrets["TWILIO_AUTH_TOKEN"],
-                st.secrets["SMS_FROM_NUMBER"]
-            )
+            raise NotImplementedError("Twilio provider not embedded; please add the class.")
         else:
             raise ValueError("Unknown provider type")
         
