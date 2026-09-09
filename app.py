@@ -231,23 +231,36 @@ def find_sheet(variants, all_sheets):
     return None
 
 def find_columns(df):
+    """
+    Detect columns with priority for exact names found in the Payment Status Report.
+    """
+    # Convert column names to uppercase for case-insensitive matching
+    cols_upper = {col: col for col in df.columns}  # original name -> original name
+
+    # ---- Priority exact matches ----
     status_col = None
     for col in df.columns:
-        col_lower = str(col).lower()
-        if 'note' in col_lower or 'feedback' in col_lower or 'status' in col_lower:
+        if col.strip().upper() == 'COLLECTION STATUS':
             status_col = col
             break
+    if status_col is None:
+        # fallback to generic search
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if 'note' in col_lower or 'feedback' in col_lower or 'status' in col_lower:
+                status_col = col
+                break
     if status_col is None:
         status_col = df.columns[-1]
 
     id_col = None
     for col in df.columns:
-        if col.strip().upper() == 'ID NUMBER':
+        if col.strip().upper() == 'APPLICANT NUMBER':
             id_col = col
             break
     if id_col is None:
         for col in df.columns:
-            if col.strip().upper() == 'APPLICANT NUMBER':
+            if col.strip().upper() == 'ID NUMBER':
                 id_col = col
                 break
     if id_col is None:
@@ -260,33 +273,62 @@ def find_columns(df):
 
     amount_col = None
     for col in df.columns:
-        if 'INSTALMENT AMOUNT' in col:
+        if col.strip().upper() == 'INSTALMENT AMOUNT':
             amount_col = col
             break
+    if amount_col is None:
+        for col in df.columns:
+            if 'INSTALMENT AMOUNT' in col:
+                amount_col = col
+                break
     if amount_col is None:
         amount_col = df.columns[-2]
 
     stage_col = None
     for col in df.columns:
-        if 'INSTALLMENT NO' in col or 'INSTALLMENT' in col:
+        if col.strip().upper() == 'INSTALLMENT NO':
             stage_col = col
             break
+    if stage_col is None:
+        for col in df.columns:
+            if 'INSTALLMENT NO' in col or 'INSTALLMENT' in col:
+                stage_col = col
+                break
     if stage_col is None:
         stage_col = df.columns[3]
 
     date_col = None
     for col in df.columns:
-        if 'COLLECTION DATE' in col or 'DATE' in col:
+        if col.strip().upper() == 'COLLECTION DATE':
             date_col = col
             break
+    if date_col is None:
+        for col in df.columns:
+            if 'COLLECTION DATE' in col or 'DATE' in col:
+                date_col = col
+                break
 
     name_col = None
+    for col in df.columns:
+        if col.strip().upper() == 'APPLICANT NAME':
+            name_col = col
+            break
+    if name_col is None:
+        for col in df.columns:
+            if 'APPLICANT NAME' in col or 'NAME' in col:
+                name_col = col
+                break
+
     cell_col = None
     for col in df.columns:
-        if 'APPLICANT NAME' in col or 'NAME' in col:
-            name_col = col
-        if 'CELL' in col or 'MOBILE' in col or 'PHONE' in col:
+        if col.strip().upper() == 'CELL':
             cell_col = col
+            break
+    if cell_col is None:
+        for col in df.columns:
+            if 'CELL' in col or 'MOBILE' in col or 'PHONE' in col:
+                cell_col = col
+                break
 
     return status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col
 
@@ -479,7 +521,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         # ================================================================
         # 🔧 EXTRACT SMS LISTS FROM PAYMENT STATUS REPORT (with diagnostics)
         # ================================================================
-        # Detect columns
+        # Detect columns using the improved find_columns
         pmt_status_col, pmt_id_col, pmt_amount_col, pmt_stage_col, pmt_date_col, pmt_name_col, pmt_cell_col = find_columns(df_pmt)
 
         # Create a clean copy for SMS extraction
@@ -513,18 +555,23 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                 'cell': pmt_cell_col
             },
             'sample_rows': df_pmt.head(5).to_dict('records'),
-            'unique_statuses': sorted(pmt_sms['status'].dropna().unique().tolist()) if not pmt_sms.empty else []
+            'unique_statuses': sorted(pmt_sms['status'].dropna().unique().tolist()) if not pmt_sms.empty else [],
+            'pmt_sms_sample': pmt_sms.head(5).to_dict('records') if not pmt_sms.empty else [],
+            'failed_count': 0,
+            'tracking_count': 0
         }
 
         # --- Extract Failed ---
         failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED']
         failed_mask = pmt_sms['status'].str.upper().str.contains('|'.join(failed_keywords), na=False)
         failed_pmt = pmt_sms[failed_mask].copy()
+        pmt_debug['failed_count'] = len(failed_pmt)
 
         # --- Extract Tracking/Intracking ---
         tracking_keywords = ['TRACKING', 'INTRACKING', 'PENDING', 'OUTSTANDING']
         tracking_mask = pmt_sms['status'].str.upper().str.contains('|'.join(tracking_keywords), na=False)
         tracking_pmt = pmt_sms[tracking_mask].copy()
+        pmt_debug['tracking_count'] = len(tracking_pmt)
 
         # For each client, take the latest record (most recent collection date)
         def get_latest_per_client(df):
@@ -1700,14 +1747,15 @@ with st.expander("🔍 Data Preview (Debugging)"):
         st.subheader("📄 Payment Status Report Diagnostics")
         st.write("**Detected columns:**", pmt_debug['columns_detected'])
         st.write("**Unique status values found:**", pmt_debug['unique_statuses'])
-        st.write("**First 5 rows of Payment Report:**")
+        st.write("**First 5 rows of raw Payment Report:**")
         st.dataframe(pd.DataFrame(pmt_debug['sample_rows']), width='stretch')
-        st.write("**Status counts:**")
-        if pmt_debug['unique_statuses']:
-            status_df = pd.DataFrame(pmt_debug['unique_statuses'], columns=['Status'])
-            st.dataframe(status_df, width='stretch')
+        st.write("**First 5 rows of cleaned Payment Report (after renaming):**")
+        if pmt_debug['pmt_sms_sample']:
+            st.dataframe(pd.DataFrame(pmt_debug['pmt_sms_sample']), width='stretch')
         else:
-            st.warning("No status values found – Payment Report may be empty or have different column names.")
+            st.warning("Cleaned Payment Report is empty – check column detection.")
+        st.write(f"**Rows matching 'Failed' keywords:** {pmt_debug['failed_count']}")
+        st.write(f"**Rows matching 'Tracking/Intracking' keywords:** {pmt_debug['tracking_count']}")
 
     st.subheader("Sample of Raw Data")
     st.dataframe(raw.head(10), width='stretch')
