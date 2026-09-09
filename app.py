@@ -18,6 +18,9 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
+# ---- SMS imports ----
+from sms_provider import GenericSMSProvider   # Change to AfricaTalking / Twilio if needed
+
 # ================================================================
 # 0. CUSTOM STYLES (CSS) — Only boxes, no background overrides
 # ================================================================
@@ -398,6 +401,13 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             temp = temp[temp['collection_date'] <= end_date]
         return temp
 
+    def get_disputed_df(df, start_date=None, end_date=None):
+        temp = df[df['status'].str.upper() == 'DISPUTED']
+        if start_date and end_date:
+            temp = temp[temp['collection_date'] >= start_date]
+            temp = temp[temp['collection_date'] <= end_date]
+        return temp
+
     def get_unique_stage_clients(df, status_filter=None, date_col=None, start_date=None, end_date=None):
         temp = df.copy()
         if status_filter:
@@ -519,7 +529,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         raw_pmt = df_pmt.copy()
         
         # ================================================================
-        # 🔧 EXTRACT SMS LISTS FROM PAYMENT STATUS REPORT (with diagnostics)
+        # 🔧 EXTRACT SMS LISTS FROM PAYMENT STATUS REPORT
         # ================================================================
         # Detect columns using the improved find_columns
         pmt_status_col, pmt_id_col, pmt_amount_col, pmt_stage_col, pmt_date_col, pmt_name_col, pmt_cell_col = find_columns(df_pmt)
@@ -558,11 +568,12 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             'unique_statuses': sorted(pmt_sms['status'].dropna().unique().tolist()) if not pmt_sms.empty else [],
             'pmt_sms_sample': pmt_sms.head(5).to_dict('records') if not pmt_sms.empty else [],
             'failed_count': 0,
-            'tracking_count': 0
+            'tracking_count': 0,
+            'disputed_count': 0
         }
 
-        # --- Extract Failed ---
-        failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED']
+        # --- Extract Failed (including Disputed) ---
+        failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED', 'DISPUTED']
         failed_mask = pmt_sms['status'].str.upper().str.contains('|'.join(failed_keywords), na=False)
         failed_pmt = pmt_sms[failed_mask].copy()
         pmt_debug['failed_count'] = len(failed_pmt)
@@ -572,6 +583,10 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         tracking_mask = pmt_sms['status'].str.upper().str.contains('|'.join(tracking_keywords), na=False)
         tracking_pmt = pmt_sms[tracking_mask].copy()
         pmt_debug['tracking_count'] = len(tracking_pmt)
+
+        # Count Disputed separately (for debug)
+        disputed_mask = pmt_sms['status'].str.upper().str.contains('DISPUTED', na=False)
+        pmt_debug['disputed_count'] = int(disputed_mask.sum())
 
         # For each client, take the latest record (most recent collection date)
         def get_latest_per_client(df):
@@ -600,7 +615,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             tracking_sms_pmt = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
 
         # ================================================================
-        # END of SMS extraction from Payment Report (no fallback)
+        # END of SMS extraction from Payment Report
         # ================================================================
         
         payment_id_col = None
@@ -788,6 +803,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         failed_cycle_df = get_failed_df(raw_stage_1_2, start_dt, end_dt)
         failed_mtd_df = get_failed_df(raw_stage_1_2, start_dt, end_dt)
         disputed_df = get_unique_stage_clients(raw_stage_1_2, 'Disputed', 'collection_date', start_dt, end_dt)
+        disputed_mtd_df = get_disputed_df(raw_stage_1_2, start_dt, end_dt)
+        disputed_mtd_v = disputed_mtd_df['amount'].sum()
         current_month_settled = raw_stage_1_2[
             (raw_stage_1_2['status'].str.upper() == 'SETTLED') &
             (raw_stage_1_2['effective_settlement_date'] >= start_dt) &
@@ -804,6 +821,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         failed_cycle_df = get_failed_df(raw_stage_1_2, last_friday, today)
         failed_mtd_df = get_failed_df(raw_stage_1_2, first_of_month, today)
         disputed_df = get_unique_stage_clients(raw_stage_1_2, 'Disputed')
+        disputed_mtd_df = get_disputed_df(raw_stage_1_2, first_of_month, today)
+        disputed_mtd_v = disputed_mtd_df['amount'].sum()
         current_month_settled = raw_stage_1_2[
             (raw_stage_1_2['status'].str.upper() == 'SETTLED') &
             (raw_stage_1_2['effective_settlement_date'] >= first_of_month) &
@@ -854,8 +873,11 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     forecast_admin_app = new_clients_est * 350
     forecast_total = forecast_restructuring + forecast_aftercare + forecast_admin_app + forecast_legal
 
-    if (settled_mtd_v + failed_mtd_v) > 0:
-        success_rate = (settled_mtd_v / (settled_mtd_v + failed_mtd_v)) * 100
+    # ---- Success Rate (Disputed counts as a FAILURE) ----
+    # Success Rate = Settled / (Settled + Failed + Disputed)
+    denominator = settled_mtd_v + failed_mtd_v + disputed_mtd_v
+    if denominator > 0:
+        success_rate = (settled_mtd_v / denominator) * 100
     else:
         success_rate = 0
     
@@ -1112,7 +1134,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         'forecast_total': forecast_total,
         'success_rate': success_rate,
         'combined_priority': combined_priority,
-        'failed_sms': failed_sms_pmt,          # <-- FROM PAYMENT REPORT
+        'failed_sms': failed_sms_pmt,          # <-- FROM PAYMENT REPORT (includes Disputed)
         'tracking_sms': tracking_sms_pmt,      # <-- FROM PAYMENT REPORT
         'failed_clients': failed_clients,
         'detail_dfs': detail_dfs,
@@ -1124,6 +1146,46 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         'use_custom_range': use_custom_range,
         'pmt_debug': pmt_debug if not forecast_mode else None
     }
+
+# ---- Helper function to send SMS ----
+def send_sms(to_number, message, provider_type="generic"):
+    """
+    Send an SMS using the configured provider.
+    Returns (success_bool, response_message).
+    """
+    try:
+        if provider_type == "generic":
+            provider = GenericSMSProvider(
+                st.secrets["SMS_API_URL"],
+                st.secrets["SMS_API_KEY"],
+                st.secrets["SMS_FROM_NUMBER"]
+            )
+        elif provider_type == "africastalking":
+            from sms_provider import AfricaTalking
+            provider = AfricaTalking(
+                st.secrets["SMS_USERNAME"],
+                st.secrets["SMS_API_KEY"],
+                st.secrets["SMS_FROM_NUMBER"]
+            )
+        elif provider_type == "twilio":
+            from sms_provider import TwilioProvider
+            provider = TwilioProvider(
+                st.secrets["TWILIO_ACCOUNT_SID"],
+                st.secrets["TWILIO_AUTH_TOKEN"],
+                st.secrets["SMS_FROM_NUMBER"]
+            )
+        else:
+            raise ValueError("Unknown provider type")
+        
+        # Format phone number (add country code if missing)
+        to_number = str(to_number).strip()
+        if not to_number.startswith("+"):
+            to_number = "+27" + to_number.lstrip("0")
+        
+        result = provider.send(to_number, message)
+        return True, result
+    except Exception as e:
+        return False, str(e)
 
 # ---- Detect sheets and handle selection ----
 with st.spinner("⏳ Reading file structure..."):
@@ -1381,7 +1443,7 @@ with col4:
     <div class="metric-card" style="border-left-color: #6f42c1;">
         <div class="metric-label">🎯 Success Rate {date_mode}</div>
         <div class="metric-value">{success_rate:.1f}%</div>
-        <div class="metric-delta">By Value</div>
+        <div class="metric-delta">By Value (Disputed = Failure)</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1667,7 +1729,7 @@ if os.path.exists(history_file):
                 with st.container():
                     st.markdown('<div class="chart-container">', unsafe_allow_html=True)
                     fig_sr = px.line(history_df, x='report_date', y='success_rate',
-                                     title='Success Rate (%) Over Time')
+                                     title='Success Rate (%) Over Time (Disputed = Failure)')
                     st.plotly_chart(fig_sr, use_container_width=True)
                     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1682,13 +1744,126 @@ if os.path.exists(history_file):
     except:
         pass
 
-# ---- SMS Export ----
+# ================================================================
+# 📱 SMS SENDING SECTION
+# ================================================================
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
-    <h3 style="font-weight: 600; color: #1e1e2d;">📱 Export SMS Lists</h3>
+    <h3 style="font-weight: 600; color: #1e1e2d;">📱 Send SMS Messages</h3>
 </div>
 """, unsafe_allow_html=True)
 
+# ---- Helper function to send SMS to selected clients ----
+def send_bulk_sms(selected_df, message, list_name):
+    if selected_df.empty:
+        st.warning("No clients selected.")
+        return
+    
+    # Confirm before sending
+    if not st.button(f"📱 Confirm Send {len(selected_df)} SMS to {list_name}"):
+        return
+    
+    progress = st.progress(0)
+    success_count = 0
+    failed_list = []
+    
+    for i, (idx, row) in enumerate(selected_df.iterrows()):
+        cell = row.get("Cell") or row.get("cell")
+        if pd.isna(cell) or not str(cell).strip():
+            failed_list.append(f"Row {i+1}: No phone number")
+            continue
+        phone = str(cell).strip()
+        # Format phone number
+        if not phone.startswith("+"):
+            phone = "+27" + phone.lstrip("0")
+        
+        # Personalise message (optional)
+        name = row.get("Name") or row.get("client_name") or "Client"
+        personalised_msg = message.replace("{name}", name)
+        
+        success, result = send_sms(phone, personalised_msg)
+        if success:
+            success_count += 1
+        else:
+            failed_list.append(f"{name} ({phone}): {result}")
+        progress.progress((i + 1) / len(selected_df))
+    
+    if success_count == len(selected_df):
+        st.success(f"✅ All {success_count} SMS messages sent successfully to {list_name}.")
+    else:
+        st.warning(f"⚠️ Sent {success_count} out of {len(selected_df)}. Failed: {', '.join(failed_list)}")
+
+# ---- Failed Clients SMS ----
+st.subheader("📋 Failed Clients (SMS)")
+if not failed_sms.empty:
+    # Add a "Select All" checkbox
+    select_all_failed = st.checkbox("Select all Failed clients", key="select_all_failed")
+    
+    # Display dataframe with a selection column
+    display_failed = failed_sms.copy()
+    display_failed["Send"] = select_all_failed
+    
+    # Allow per-row toggling using st.data_editor (interactive)
+    edited_failed = st.data_editor(
+        display_failed,
+        column_config={
+            "Send": st.column_config.CheckboxColumn("Send", default=select_all_failed)
+        },
+        disabled=["ID NUMBER", "Name", "Cell", "Stage", "Amount", "Status"],
+        hide_index=True,
+        key="failed_editor"
+    )
+    
+    # Message input for failed clients
+    failed_message = st.text_area(
+        "Message for Failed Clients",
+        value="Dear {name}, your payment has failed or been disputed. Please contact us to resolve this.",
+        key="failed_msg"
+    )
+    
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        if st.button("📱 Send SMS to Selected Failed Clients", key="send_failed"):
+            selected = edited_failed[edited_failed["Send"] == True]
+            send_bulk_sms(selected, failed_message, "Failed Clients")
+else:
+    st.info("No failed clients.")
+
+# ---- Intracking Clients SMS ----
+st.subheader("📋 Intracking Clients (SMS)")
+if not tracking_sms.empty:
+    select_all_tracking = st.checkbox("Select all Intracking clients", key="select_all_tracking")
+    
+    display_tracking = tracking_sms.copy()
+    display_tracking["Send"] = select_all_tracking
+    
+    edited_tracking = st.data_editor(
+        display_tracking,
+        column_config={
+            "Send": st.column_config.CheckboxColumn("Send", default=select_all_tracking)
+        },
+        disabled=["ID NUMBER", "Name", "Cell", "Stage", "Amount", "Status"],
+        hide_index=True,
+        key="tracking_editor"
+    )
+    
+    tracking_message = st.text_area(
+        "Message for Intracking Clients",
+        value="Dear {name}, your payment is being tracked. Please ensure your account is up to date.",
+        key="tracking_msg"
+    )
+    
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        if st.button("📱 Send SMS to Selected Intracking Clients", key="send_tracking"):
+            selected = edited_tracking[edited_tracking["Send"] == True]
+            send_bulk_sms(selected, tracking_message, "Intracking Clients")
+else:
+    st.info("No intracking clients.")
+
+# ---- Keep the existing CSV download buttons (they are still useful) ----
+st.markdown("---")
+st.subheader("📥 Export SMS Lists (CSV)")
 col1, col2 = st.columns(2)
 with col1:
     if not failed_sms.empty:
@@ -1702,18 +1877,6 @@ with col2:
         st.download_button("📥 Download Intracking SMS CSV", data=csv_tracking, file_name="intracking_sms.csv", mime="text/csv")
     else:
         st.info("No intracking clients to export.")
-
-st.subheader("📋 Failed Clients (SMS)")
-if not failed_sms.empty:
-    st.dataframe(failed_sms, width='stretch')
-else:
-    st.info("No failed clients.")
-
-st.subheader("📋 Intracking Clients (SMS)")
-if not tracking_sms.empty:
-    st.dataframe(tracking_sms, width='stretch')
-else:
-    st.info("No intracking clients.")
 
 # ---- Priority Queue ----
 st.subheader("🔴 Priority Queue")
@@ -1754,8 +1917,9 @@ with st.expander("🔍 Data Preview (Debugging)"):
             st.dataframe(pd.DataFrame(pmt_debug['pmt_sms_sample']), width='stretch')
         else:
             st.warning("Cleaned Payment Report is empty – check column detection.")
-        st.write(f"**Rows matching 'Failed' keywords:** {pmt_debug['failed_count']}")
+        st.write(f"**Rows matching 'Failed/Disputed' keywords:** {pmt_debug['failed_count']}")
         st.write(f"**Rows matching 'Tracking/Intracking' keywords:** {pmt_debug['tracking_count']}")
+        st.write(f"**Rows matching 'Disputed' only:** {pmt_debug['disputed_count']}")
 
     st.subheader("Sample of Raw Data")
     st.dataframe(raw.head(10), width='stretch')
@@ -1779,7 +1943,7 @@ def generate_excel():
                        'Curr Month Debits (Stage 1/2)', 'Next Month Debits (Stage 1/2)',
                        'Failed Period (Stage 1/2)', 'Failed MTD (Stage 1/2)', 'Disputed (Stage 1/2)',
                        'Revenue Total (Stage 1/2, Period)',
-                       'Success Rate (Period, by value)',
+                       'Success Rate (Period, by value, Disputed = Failure)',
                        'Single Month Mode'],
             'Value': [f"{settled_cycle_c} | R{settled_cycle_v:,.2f}",
                       f"{settled_today_c} | R{settled_today_v:,.2f}",
