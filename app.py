@@ -466,6 +466,57 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         
         raw_pmt = df_pmt.copy()
         
+        # ================================================================
+        # 🔧 NEW: Extract SMS lists directly from the Payment Status Report
+        # ================================================================
+        # Detect columns in the raw Payment Report
+        pmt_status_col, pmt_id_col, pmt_amount_col, pmt_stage_col, pmt_date_col, pmt_name_col, pmt_cell_col = find_columns(df_pmt)
+
+        # Create a clean copy for SMS extraction
+        pmt_sms = df_pmt.copy()
+        pmt_sms.rename(columns={
+            pmt_id_col: 'id_number',
+            pmt_name_col: 'client_name',
+            pmt_cell_col: 'cell',
+            pmt_stage_col: 'payment_stage',
+            pmt_amount_col: 'amount',
+            pmt_status_col: 'status',
+            pmt_date_col: 'collection_date'
+        }, inplace=True)
+
+        # Clean data types
+        pmt_sms['payment_stage'] = pd.to_numeric(pmt_sms['payment_stage'], errors='coerce')
+        pmt_sms['amount'] = pd.to_numeric(pmt_sms['amount'], errors='coerce')
+        pmt_sms['collection_date'] = pd.to_datetime(pmt_sms['collection_date'], errors='coerce')
+        pmt_sms['id_number'] = pmt_sms['id_number'].astype(str).str.strip()
+        pmt_sms = pmt_sms.dropna(subset=['id_number', 'payment_stage', 'amount'])
+
+        # Filter for Failed and Intracking/Tracking
+        failed_pmt = pmt_sms[pmt_sms['status'].str.upper() == 'FAILED'].copy()
+        tracking_pmt = pmt_sms[pmt_sms['status'].str.upper().isin(['TRACKING', 'INTRACKING'])].copy()
+
+        # For each client, take the latest record (most recent collection date)
+        def get_latest_per_client(df):
+            if df.empty:
+                return df
+            df = df.sort_values('collection_date')
+            return df.groupby('id_number').tail(1).reset_index(drop=True)
+
+        failed_pmt_unique = get_latest_per_client(failed_pmt)
+        tracking_pmt_unique = get_latest_per_client(tracking_pmt)
+
+        # Select and rename columns for display
+        sms_cols = ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']
+        failed_sms_pmt = failed_pmt_unique[sms_cols].copy() if not failed_pmt_unique.empty else pd.DataFrame(columns=sms_cols)
+        tracking_sms_pmt = tracking_pmt_unique[sms_cols].copy() if not tracking_pmt_unique.empty else pd.DataFrame(columns=sms_cols)
+
+        # Rename to match the dashboard's expected column names
+        failed_sms_pmt.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
+        tracking_sms_pmt.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
+        # ================================================================
+        # END of SMS extraction from Payment Report
+        # ================================================================
+        
         payment_id_col = None
         for col in raw_pmt.columns:
             if col.strip().upper() == 'ID NUMBER':
@@ -872,28 +923,9 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         cols = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level']
         combined_priority = pd.DataFrame(columns=cols)
     
-    # ---- SMS lists ----
-    def ensure_columns(df, required_cols):
-        for col in required_cols:
-            if col not in df.columns:
-                df[col] = ''
-        return df
-    
-    failed_sms = raw[raw['status'].str.upper() == 'FAILED'].copy()
-    if not failed_sms.empty:
-        ensure_columns(failed_sms, ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status'])
-        failed_sms = failed_sms[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']]
-        failed_sms.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
-    else:
-        failed_sms = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
-    
-    tracking_sms = raw[raw['status'].str.upper().isin(['TRACKING', 'INTRACKING'])].copy()
-    if not tracking_sms.empty:
-        ensure_columns(tracking_sms, ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status'])
-        tracking_sms = tracking_sms[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']]
-        tracking_sms.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
-    else:
-        tracking_sms = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
+    # ---- SMS lists (already extracted from Payment Report as failed_sms_pmt and tracking_sms_pmt) ----
+    # We no longer derive these from 'raw'.
+    # Use the already prepared failed_sms_pmt and tracking_sms_pmt.
     
     def get_latest_record_for_sheet(df):
         if df.empty:
@@ -995,8 +1027,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         'forecast_total': forecast_total,
         'success_rate': success_rate,
         'combined_priority': combined_priority,
-        'failed_sms': failed_sms,
-        'tracking_sms': tracking_sms,
+        'failed_sms': failed_sms_pmt,          # <-- NOW FROM PAYMENT REPORT
+        'tracking_sms': tracking_sms_pmt,      # <-- NOW FROM PAYMENT REPORT
         'failed_clients': failed_clients,
         'detail_dfs': detail_dfs,
         'raw': raw,
