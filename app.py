@@ -461,6 +461,10 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                 raw[col] = '' if col in ['client_name', 'cell', 'status'] else 0
         raw['due_date'] = raw['collection_date']
         raw['effective_settlement_date'] = raw['collection_date']
+        # In forecast mode, no Payment Report, so SMS lists stay empty
+        failed_sms_pmt = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
+        tracking_sms_pmt = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
+        pmt_debug = None
     else:
         try:
             df_pmt = pd.read_excel(payment_content, sheet_name='Details', header=3)
@@ -548,26 +552,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         else:
             tracking_sms_pmt = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
 
-        # ---- Fallback: if Payment Report gave empty lists, use Fee Audit (with warning) ----
-        if failed_sms_pmt.empty and tracking_sms_pmt.empty:
-            st.warning("⚠️ No failed or tracking clients found in the Payment Status Report. "
-                       "Falling back to Fee Audit data for SMS lists. "
-                       "Check that your Payment Report has the correct columns and status values.")
-            # Use the old method from Fee Audit (as a temporary fallback)
-            failed_sms_fallback = raw[raw['status'].str.upper() == 'FAILED'].copy()
-            tracking_sms_fallback = raw[raw['status'].str.upper().isin(['TRACKING', 'INTRACKING'])].copy()
-            if not failed_sms_fallback.empty:
-                ensure_columns(failed_sms_fallback, ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status'])
-                failed_sms_fallback = failed_sms_fallback[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']]
-                failed_sms_fallback.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
-                failed_sms_pmt = failed_sms_fallback
-            if not tracking_sms_fallback.empty:
-                ensure_columns(tracking_sms_fallback, ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status'])
-                tracking_sms_fallback = tracking_sms_fallback[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']]
-                tracking_sms_fallback.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
-                tracking_sms_pmt = tracking_sms_fallback
         # ================================================================
-        # END of SMS extraction from Payment Report
+        # END of SMS extraction from Payment Report (no fallback)
         # ================================================================
         
         payment_id_col = None
@@ -976,8 +962,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         cols = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level']
         combined_priority = pd.DataFrame(columns=cols)
     
-    # ---- SMS lists (already extracted from Payment Report as failed_sms_pmt and tracking_sms_pmt) ----
-    # We no longer derive these from 'raw'.
+    # ---- SMS lists (already extracted from Payment Report) ----
     # Use the already prepared failed_sms_pmt and tracking_sms_pmt.
     
     def get_latest_record_for_sheet(df):
@@ -1080,8 +1065,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         'forecast_total': forecast_total,
         'success_rate': success_rate,
         'combined_priority': combined_priority,
-        'failed_sms': failed_sms_pmt,          # <-- NOW FROM PAYMENT REPORT (or fallback)
-        'tracking_sms': tracking_sms_pmt,      # <-- NOW FROM PAYMENT REPORT (or fallback)
+        'failed_sms': failed_sms_pmt,          # <-- FROM PAYMENT REPORT
+        'tracking_sms': tracking_sms_pmt,      # <-- FROM PAYMENT REPORT
         'failed_clients': failed_clients,
         'detail_dfs': detail_dfs,
         'raw': raw,
@@ -1090,7 +1075,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         'fee_status_df': fee_status_df,
         'fee_base': fee_base,
         'use_custom_range': use_custom_range,
-        'pmt_debug': pmt_debug if not forecast_mode else None   # <-- ADDED for diagnostics
+        'pmt_debug': pmt_debug if not forecast_mode else None
     }
 
 # ---- Detect sheets and handle selection ----
