@@ -2,8 +2,8 @@ name: Send Daily Email Report
 
 on:
   schedule:
-    - cron: '0 8 * * *'
-  workflow_dispatch:
+    - cron: '0 8 * * *'  # Runs at 8 AM UTC daily
+  workflow_dispatch:      # Allows manual trigger
 
 jobs:
   send_email:
@@ -19,26 +19,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install sendgrid
+          pip install -r requirements.txt
+          pip install requests pandas
 
       - name: Send email via SendGrid
         env:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
-        run: |
-          python -c "
-          import os
-          from sendgrid import SendGridAPIClient
-          from sendgrid.helpers.mail import Mail
-
-          message = Mail(
-              from_email='${{ secrets.FROM_EMAIL }}',
-              to_emails=os.environ['TO_EMAIL'],
-              subject='📊 Debt Review Report - $(date +'%d %b %Y')',
-              html_content=f'<h1>Debt Review Dashboard Report</h1><p>View the full dashboard at: <a href=\"{os.environ['DASHBOARD_URL']}\">{os.environ['DASHBOARD_URL']}</a></p>'
-          )
-          sg = SendGridAPIClient(os.environ['SENDGRID_API_KEY'])
-          response = sg.send(message)
-          print(f'✅ Email sent, status code: {response.status_code}')
-          "
+        run: python send_email_sendgrid.py
