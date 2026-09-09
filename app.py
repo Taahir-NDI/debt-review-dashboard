@@ -1761,7 +1761,7 @@ if os.path.exists(history_file):
         pass
 
 # ================================================================
-# 📱 SMS SENDING SECTION
+# 📱 SMS SENDING SECTION — with your templates
 # ================================================================
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
@@ -1812,14 +1812,11 @@ def send_bulk_sms(selected_df, message, list_name):
 # ---- Failed Clients SMS ----
 st.subheader("📋 Failed Clients (SMS)")
 if not failed_sms.empty:
-    # Add a "Select All" checkbox
     select_all_failed = st.checkbox("Select all Failed clients", key="select_all_failed")
     
-    # Display dataframe with a selection column
     display_failed = failed_sms.copy()
     display_failed["Send"] = select_all_failed
     
-    # Allow per-row toggling using st.data_editor (interactive)
     edited_failed = st.data_editor(
         display_failed,
         column_config={
@@ -1830,10 +1827,9 @@ if not failed_sms.empty:
         key="failed_editor"
     )
     
-    # Message input for failed clients
     failed_message = st.text_area(
         "Message for Failed Clients",
-        value="Dear {name}, your payment has failed or been disputed. Please contact us to resolve this.",
+        value="Dear {name},\nURGENT: Your debit order has failed. Please make payment immediately to avoid arrears and possible termination of your debt review agreements. For assistance, contact us at: info@nationaldebt.org.za / 0873541057 / WhatsApp: https://wa.me/27873541057",
         key="failed_msg"
     )
     
@@ -1865,7 +1861,7 @@ if not tracking_sms.empty:
     
     tracking_message = st.text_area(
         "Message for Intracking Clients",
-        value="Dear {name}, your payment is being tracked. Please ensure your account is up to date.",
+        value="NATIONAL DEBT INTERVENTION: Dear {name}, we have not yet received your monthly instalment, please ensure you have enough funds available in your bank account for the debit to go off successfully. 0873541057 / info@nationaldebt.org.za/ WhatsApp https://wa.me/27873541057",
         key="tracking_msg"
     )
     
@@ -1877,7 +1873,7 @@ if not tracking_sms.empty:
 else:
     st.info("No intracking clients.")
 
-# ---- Keep the existing CSV download buttons (they are still useful) ----
+# ---- CSV download buttons (still useful) ----
 st.markdown("---")
 st.subheader("📥 Export SMS Lists (CSV)")
 col1, col2 = st.columns(2)
@@ -1920,7 +1916,6 @@ with st.expander("🔍 Data Preview (Debugging)"):
     st.write(f"**Unique clients (all):** {raw['id_number'].nunique()}")
     st.write(f"**Unique clients (stage 1/2):** {raw_stage_1_2['id_number'].nunique() if not raw_stage_1_2.empty else 0}")
 
-    # ---- Diagnostic info from Payment Report ----
     if not forecast_mode and 'pmt_debug' in result and result['pmt_debug']:
         pmt_debug = result['pmt_debug']
         st.subheader("📄 Payment Status Report Diagnostics")
