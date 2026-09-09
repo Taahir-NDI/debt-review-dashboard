@@ -379,7 +379,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     def get_latest_record(group):
         return group.sort_values('collection_date').iloc[-1]
 
-    # ---- ADD MISSING ensure_columns function ----
     def ensure_columns(df, required_cols):
         for col in required_cols:
             if col not in df.columns:
@@ -474,9 +473,9 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         raw_pmt = df_pmt.copy()
         
         # ================================================================
-        # 🔧 NEW: Extract SMS lists directly from the Payment Status Report
+        # 🔧 EXTRACT SMS LISTS FROM PAYMENT STATUS REPORT (with diagnostics)
         # ================================================================
-        # Detect columns in the raw Payment Report
+        # Detect columns
         pmt_status_col, pmt_id_col, pmt_amount_col, pmt_stage_col, pmt_date_col, pmt_name_col, pmt_cell_col = find_columns(df_pmt)
 
         # Create a clean copy for SMS extraction
@@ -498,9 +497,30 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         pmt_sms['id_number'] = pmt_sms['id_number'].astype(str).str.strip()
         pmt_sms = pmt_sms.dropna(subset=['id_number', 'payment_stage', 'amount'])
 
-        # Filter for Failed and Intracking/Tracking
-        failed_pmt = pmt_sms[pmt_sms['status'].str.upper() == 'FAILED'].copy()
-        tracking_pmt = pmt_sms[pmt_sms['status'].str.upper().isin(['TRACKING', 'INTRACKING'])].copy()
+        # --- For debugging: store the raw Payment Report info ---
+        pmt_debug = {
+            'columns_detected': {
+                'status': pmt_status_col,
+                'id': pmt_id_col,
+                'amount': pmt_amount_col,
+                'stage': pmt_stage_col,
+                'date': pmt_date_col,
+                'name': pmt_name_col,
+                'cell': pmt_cell_col
+            },
+            'sample_rows': df_pmt.head(5).to_dict('records'),
+            'unique_statuses': sorted(pmt_sms['status'].dropna().unique().tolist()) if not pmt_sms.empty else []
+        }
+
+        # --- Extract Failed ---
+        failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED']
+        failed_mask = pmt_sms['status'].str.upper().str.contains('|'.join(failed_keywords), na=False)
+        failed_pmt = pmt_sms[failed_mask].copy()
+
+        # --- Extract Tracking/Intracking ---
+        tracking_keywords = ['TRACKING', 'INTRACKING', 'PENDING', 'OUTSTANDING']
+        tracking_mask = pmt_sms['status'].str.upper().str.contains('|'.join(tracking_keywords), na=False)
+        tracking_pmt = pmt_sms[tracking_mask].copy()
 
         # For each client, take the latest record (most recent collection date)
         def get_latest_per_client(df):
@@ -518,8 +538,34 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         tracking_sms_pmt = tracking_pmt_unique[sms_cols].copy() if not tracking_pmt_unique.empty else pd.DataFrame(columns=sms_cols)
 
         # Rename to match the dashboard's expected column names
-        failed_sms_pmt.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
-        tracking_sms_pmt.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
+        if not failed_sms_pmt.empty:
+            failed_sms_pmt.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
+        else:
+            failed_sms_pmt = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
+
+        if not tracking_sms_pmt.empty:
+            tracking_sms_pmt.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
+        else:
+            tracking_sms_pmt = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
+
+        # ---- Fallback: if Payment Report gave empty lists, use Fee Audit (with warning) ----
+        if failed_sms_pmt.empty and tracking_sms_pmt.empty:
+            st.warning("⚠️ No failed or tracking clients found in the Payment Status Report. "
+                       "Falling back to Fee Audit data for SMS lists. "
+                       "Check that your Payment Report has the correct columns and status values.")
+            # Use the old method from Fee Audit (as a temporary fallback)
+            failed_sms_fallback = raw[raw['status'].str.upper() == 'FAILED'].copy()
+            tracking_sms_fallback = raw[raw['status'].str.upper().isin(['TRACKING', 'INTRACKING'])].copy()
+            if not failed_sms_fallback.empty:
+                ensure_columns(failed_sms_fallback, ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status'])
+                failed_sms_fallback = failed_sms_fallback[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']]
+                failed_sms_fallback.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
+                failed_sms_pmt = failed_sms_fallback
+            if not tracking_sms_fallback.empty:
+                ensure_columns(tracking_sms_fallback, ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status'])
+                tracking_sms_fallback = tracking_sms_fallback[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']]
+                tracking_sms_fallback.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
+                tracking_sms_pmt = tracking_sms_fallback
         # ================================================================
         # END of SMS extraction from Payment Report
         # ================================================================
@@ -1034,8 +1080,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         'forecast_total': forecast_total,
         'success_rate': success_rate,
         'combined_priority': combined_priority,
-        'failed_sms': failed_sms_pmt,          # <-- NOW FROM PAYMENT REPORT
-        'tracking_sms': tracking_sms_pmt,      # <-- NOW FROM PAYMENT REPORT
+        'failed_sms': failed_sms_pmt,          # <-- NOW FROM PAYMENT REPORT (or fallback)
+        'tracking_sms': tracking_sms_pmt,      # <-- NOW FROM PAYMENT REPORT (or fallback)
         'failed_clients': failed_clients,
         'detail_dfs': detail_dfs,
         'raw': raw,
@@ -1043,7 +1089,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         'all_future': all_future,
         'fee_status_df': fee_status_df,
         'fee_base': fee_base,
-        'use_custom_range': use_custom_range
+        'use_custom_range': use_custom_range,
+        'pmt_debug': pmt_debug if not forecast_mode else None   # <-- ADDED for diagnostics
     }
 
 # ---- Detect sheets and handle selection ----
@@ -1652,7 +1699,7 @@ if not combined_priority.empty:
 else:
     st.info("No clients in the priority queue.")
 
-# ---- Data Preview ----
+# ---- Data Preview with Diagnostics ----
 with st.expander("🔍 Data Preview (Debugging)"):
     st.subheader("Summary")
     st.write(f"**Total rows after merge:** {len(raw)}")
@@ -1661,6 +1708,22 @@ with st.expander("🔍 Data Preview (Debugging)"):
     st.write(f"**Next sheet:** `{next_sheet_used if next_sheet_used else 'None'}`")
     st.write(f"**Unique clients (all):** {raw['id_number'].nunique()}")
     st.write(f"**Unique clients (stage 1/2):** {raw_stage_1_2['id_number'].nunique() if not raw_stage_1_2.empty else 0}")
+
+    # ---- Diagnostic info from Payment Report ----
+    if not forecast_mode and 'pmt_debug' in result and result['pmt_debug']:
+        pmt_debug = result['pmt_debug']
+        st.subheader("📄 Payment Status Report Diagnostics")
+        st.write("**Detected columns:**", pmt_debug['columns_detected'])
+        st.write("**Unique status values found:**", pmt_debug['unique_statuses'])
+        st.write("**First 5 rows of Payment Report:**")
+        st.dataframe(pd.DataFrame(pmt_debug['sample_rows']), width='stretch')
+        st.write("**Status counts:**")
+        if pmt_debug['unique_statuses']:
+            status_df = pd.DataFrame(pmt_debug['unique_statuses'], columns=['Status'])
+            st.dataframe(status_df, width='stretch')
+        else:
+            st.warning("No status values found – Payment Report may be empty or have different column names.")
+
     st.subheader("Sample of Raw Data")
     st.dataframe(raw.head(10), width='stretch')
     st.subheader("Future Debits")
