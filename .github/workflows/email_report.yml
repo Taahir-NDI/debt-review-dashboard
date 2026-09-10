@@ -1,19 +1,19 @@
-name: Send Daily Email Report
+name: Send Email Report
 
 on:
   schedule:
-    - cron: '0 8 * * *'  # Runs at 8 AM UTC daily
-  workflow_dispatch:      # Allows manual trigger
+    - cron: '0 */8 * * *'   # Runs every 8 hours: 00:00, 08:00, 16:00 UTC
+  workflow_dispatch:         # Allows manual trigger from the Actions tab
 
 jobs:
   send_email:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6   # ✅ Node.js 24 compatible
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v6   # ✅ Node.js 24 compatible
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
