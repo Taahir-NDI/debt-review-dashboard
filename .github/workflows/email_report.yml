@@ -2,8 +2,8 @@ name: Send Email Report
 
 on:
   schedule:
-    - cron: '0 */8 * * *'   # Runs every 8 hours: 06:00, 14:00, 22:00 UTC
-  workflow_dispatch:         # Allows manual trigger from the Actions tab
+    - cron: '0 */8 * * *'   # Every 8 hours (00:00, 08:00, 16:00 UTC)
+  workflow_dispatch:         # Manual trigger
 
 jobs:
   send_email:
@@ -19,8 +19,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          pip install requests pandas
+          pip install requests pandas google-api-python-client google-auth
 
       - name: Send email via SendGrid
         env:
@@ -28,4 +27,14 @@ jobs:
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          FOLDER_ID: ${{ secrets.FOLDER_ID }}
+          PROJECT_ID: ${{ secrets.PROJECT_ID }}
+          PRIVATE_KEY_ID: ${{ secrets.PRIVATE_KEY_ID }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          CLIENT_EMAIL: ${{ secrets.CLIENT_EMAIL }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          AUTH_URI: ${{ secrets.AUTH_URI }}
+          TOKEN_URI: ${{ secrets.TOKEN_URI }}
+          AUTH_PROVIDER_X509_CERT_URL: ${{ secrets.AUTH_PROVIDER_X509_CERT_URL }}
+          CLIENT_X509_CERT_URL: ${{ secrets.CLIENT_X509_CERT_URL }}
         run: python send_email_sendgrid.py
