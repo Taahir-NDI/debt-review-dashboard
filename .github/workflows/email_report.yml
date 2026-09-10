@@ -2,7 +2,7 @@ name: Send Email Report
 
 on:
   schedule:
-    - cron: '0 */8 * * *'   # Runs every 8 hours: 00:00, 08:00, 16:00 UTC
+    - cron: '0 */8 * * *'   # Runs every 8 hours: 06:00, 14:00, 22:00 UTC
   workflow_dispatch:         # Allows manual trigger from the Actions tab
 
 jobs:
