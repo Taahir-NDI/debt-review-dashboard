@@ -156,7 +156,7 @@ def build_report(fee_content, payment_content):
     if name_col: fee_base.rename(columns={name_col: "client_name"}, inplace=True)
     if cell_col: fee_base.rename(columns={cell_col: "cell"}, inplace=True)
 
-    # ---- FIX: Ensure all downstream-required columns exist ----
+    # ---- Ensure all downstream-required columns exist ----
     for col in ["client_name", "cell", "collection_date"]:
         if col not in fee_base.columns:
             fee_base[col] = ""
@@ -326,7 +326,8 @@ def build_report(fee_content, payment_content):
 # ---- Build the Excel workbook ----
 def build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df):
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+    # ---- Using openpyxl (already installed by the workflow) ----
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
         dashboard = pd.DataFrame({
             "Metric": [
                 "Settled Period Total",
