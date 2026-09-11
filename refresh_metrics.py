@@ -14,7 +14,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 # ================================================================
-# 🆔 ID NORMALIZER — Keeps IDs as clean integer strings
+# 🆔 ID & PHONE NORMALIZERS
 # ================================================================
 def normalize_id(val):
     """Convert any ID value to a clean integer-style string."""
@@ -28,6 +28,29 @@ def normalize_id(val):
         return str(val)
     s = str(val).strip()
     if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    return s
+
+def normalize_phone(val):
+    """Convert a phone number to a clean string (preserves leading zeros)."""
+    if pd.isna(val):
+        return ""
+    if isinstance(val, (int, np.integer)):
+        return str(int(val))
+    if isinstance(val, (float, np.floating)):
+        # Format as integer if it's a whole number, avoiding scientific notation
+        if float(val).is_integer():
+            return str(int(val))
+        return str(val)
+    s = str(val).strip()
+    # Handle Excel numbers like "7.207528e+09" or "720752772.0"
+    try:
+        f = float(s)
+        if f.is_integer():
+            return str(int(f))
+    except (ValueError, TypeError):
+        pass
+    if s.endswith(".0"):
         s = s[:-2]
     return s
 
@@ -96,7 +119,7 @@ def find_columns(df):
     if status_col is None:
         status_col = df.columns[-1]
 
-    # ✅ FIX: Prefer "ID NUMBER" over "APPLICANT NUMBER"
+    # Prefer exact "ID NUMBER" over "APPLICANT NUMBER"
     id_col = None
     for col in df.columns:
         if str(col).strip().upper() == "ID NUMBER":
@@ -138,12 +161,27 @@ def find_columns(df):
             break
 
     name_col = None
-    cell_col = None
     for col in df.columns:
         if "APPLICANT NAME" in str(col).upper() or "NAME" in str(col).upper():
             name_col = col
-        if "CELL" in str(col).upper():
+            break
+
+    # ✅ FIX: Prefer exact "CELL" match first, then fallback
+    cell_col = None
+    for col in df.columns:
+        if str(col).strip().upper() == "CELL":
             cell_col = col
+            break
+    if cell_col is None:
+        for col in df.columns:
+            if "CELL" in str(col).upper():
+                cell_col = col
+                break
+    if cell_col is None:
+        for col in df.columns:
+            if "MOBILE" in str(col).upper() or "PHONE" in str(col).upper():
+                cell_col = col
+                break
 
     return status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col
 
@@ -191,6 +229,7 @@ def build_report(fee_content, payment_content):
             fee_base[col] = ""
 
     fee_base["id_number"] = fee_base["id_number"].apply(normalize_id)
+    fee_base["cell"] = fee_base["cell"].apply(normalize_phone)
     fee_base["payment_stage"] = pd.to_numeric(fee_base["payment_stage"], errors="coerce")
     fee_base["amount"] = pd.to_numeric(fee_base["amount"], errors="coerce")
     fee_base["collection_date"] = pd.to_datetime(fee_base["collection_date"], errors="coerce")
@@ -218,7 +257,7 @@ def build_report(fee_content, payment_content):
     pmt["amount"] = pd.to_numeric(pmt["amount"], errors="coerce")
     pmt["collection_date"] = pd.to_datetime(pmt["collection_date"], errors="coerce")
 
-    # SMS lists (from Payment Report)
+    # ---- SMS lists (from Payment Report) ----
     sms_cols = ["id_number", "client_name", "cell", "payment_stage", "amount", "status"]
     pmt_sms = pay_df.rename(columns={
         p_id_col: "id_number", p_name_col: "client_name", p_cell_col: "cell",
@@ -229,15 +268,19 @@ def build_report(fee_content, payment_content):
     pmt_sms["amount"] = pd.to_numeric(pmt_sms["amount"], errors="coerce")
     pmt_sms["collection_date"] = pd.to_datetime(pmt_sms["collection_date"], errors="coerce")
     pmt_sms["id_number"] = pmt_sms["id_number"].apply(normalize_id)
+    # ✅ FIX: Normalize Cell numbers so they display cleanly
+    if "cell" in pmt_sms.columns:
+        pmt_sms["cell"] = pmt_sms["cell"].apply(normalize_phone)
     pmt_sms = pmt_sms.dropna(subset=["id_number", "payment_stage", "amount"])
 
-    # ================================================================
-    # Failed SMS list — includes ALL Failed/Disputed clients
-    # ================================================================
+    # ---- Failed SMS list — only within Settled Period Total window ----
     failed_keywords = ["FAILED", "FAIL", "DECLINED", "REJECTED", "DISPUTED", "CLIENT CANCELLED MANDATE"]
     failed_mask = pmt_sms["status"].str.upper().str.contains("|".join(failed_keywords), na=False)
     failed_pmt = pmt_sms[failed_mask].copy()
-    # (No date filter — all failures included)
+    failed_pmt = failed_pmt[
+        (failed_pmt["collection_date"] >= last_friday) &
+        (failed_pmt["collection_date"] <= today)
+    ]
 
     tracking_mask = pmt_sms["status"].str.upper().str.contains("TRACKING|INTRACKING", na=False)
     tracking_pmt = pmt_sms[tracking_mask].copy()
@@ -270,7 +313,7 @@ def build_report(fee_content, payment_content):
                 agg_cols[c] = "sum" if c == "amount" else "first"
         cm_df = cm_df.groupby("id_number").agg(agg_cols).reset_index()
 
-    # ---- Metrics (month-to-date) ----
+    # ---- Metrics ----
     merged = fee_base.merge(
         pmt[["id_number", "payment_stage", "status", "amount", "collection_date"]],
         on=["id_number", "payment_stage"], how="left", suffixes=("", "_pmt")
@@ -298,7 +341,6 @@ def build_report(fee_content, payment_content):
     denom = settled_mtd_v + failed_mtd_v + disputed_mtd_v
     success_rate = (settled_mtd_v / denom * 100) if denom > 0 else 0
 
-    # ---- Revenue ----
     settled_all = stage12[stage12["status_upper"] == "SETTLED"].copy()
     settled_all = settled_all.sort_values(["id_number", "collection_date"])
     settled_all["rank"] = settled_all.groupby("id_number").cumcount() + 1
@@ -313,7 +355,6 @@ def build_report(fee_content, payment_content):
     settled_all["revenue"] = settled_all.apply(calc_rev, axis=1)
     revenue_total = settled_all[settled_all["collection_date"] >= first_of_month]["revenue"].sum()
 
-    # ---- Future Debits ----
     future_mask = fee_base["status"].astype(str).str.upper().str.contains("FUTURE", na=False)
     future_df = fee_base[future_mask & fee_base["payment_stage"].isin([1, 2])].dropna(subset=["collection_date"])
     tomorrow = today + timedelta(days=1)
@@ -430,10 +471,9 @@ def main():
     print("🧮 Computing metrics + building reports...")
     metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df = build_report(fee_content, payment_content)
     print("Computed:", json.dumps(metrics, indent=2))
-    print(f"📊 Failed SMS list size: {len(failed_sms_df)} clients")
+    print(f"📊 Failed SMS list size (this period): {len(failed_sms_df)} clients")
     print(f"📊 Intracking SMS list size: {len(tracking_sms_df)} clients")
 
-    # ---- Update metrics_history.csv ----
     try:
         history_bytes = download_file(service, folder_id, "metrics_history.csv")
         history_df = pd.read_csv(history_bytes)
@@ -454,7 +494,6 @@ def main():
     upload_or_update(service, folder_id, "metrics_history.csv", csv_bytes, "text/csv")
     print("✅ Updated metrics_history.csv on Drive.")
 
-    # ---- Full Excel report ----
     print("📊 Building full Excel report...")
     excel_bytes = build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df)
     excel_bytes.seek(0)
@@ -464,7 +503,6 @@ def main():
     )
     print("✅ Uploaded Debt_Review_Report.xlsx to Drive.")
 
-    # ---- Failed SMS-only file ----
     print("📊 Building Failed SMS-only Excel...")
     failed_sms_bytes = build_single_sheet_excel(failed_sms_df, "Failed SMS")
     failed_sms_bytes.seek(0)
@@ -474,7 +512,6 @@ def main():
     )
     print("✅ Uploaded Failed_SMS.xlsx to Drive.")
 
-    # ---- Intracking SMS-only file ----
     print("📊 Building Intracking SMS-only Excel...")
     tracking_sms_bytes = build_single_sheet_excel(tracking_sms_df, "Intracking SMS")
     tracking_sms_bytes.seek(0)
