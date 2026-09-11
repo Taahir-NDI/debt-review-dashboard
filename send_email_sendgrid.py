@@ -1,5 +1,5 @@
 # ================================================================
-# 📧 SEND EMAIL VIA SENDGRID — with Excel attachment
+# 📧 SEND EMAIL VIA SENDGRID — with Excel attachments + second SMS email
 # ================================================================
 
 import os
@@ -16,6 +16,7 @@ from googleapiclient.http import MediaIoBaseDownload
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 FROM_EMAIL = os.getenv("FROM_EMAIL", "taahirnationaldebt@gmail.com")
 TO_EMAIL = os.getenv("TO_EMAIL")
+TO_EMAIL_SMS = os.getenv("TO_EMAIL_SMS")
 DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://your-dashboard.streamlit.app")
 FOLDER_ID = os.getenv("FOLDER_ID")
 
@@ -78,7 +79,7 @@ def get_metrics():
         print(f"⚠️ Could not read metrics from Drive: {e}")
     return DEFAULT_METRICS
 
-# ---- HTML body ----
+# ---- HTML body (main email) ----
 def create_html_body(metrics):
     today = datetime.now().strftime("%d %B %Y")
     return f"""
@@ -146,7 +147,43 @@ def create_html_body(metrics):
     </html>
     """
 
-# ---- Send email ----
+# ---- HTML body for the SMS-only email ----
+def create_sms_email_body():
+    today = datetime.now().strftime("%d %B %Y")
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; background-color: #f8f9fa; padding: 20px; }}
+            .container {{ max-width: 600px; margin: 0 auto; background: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            .header {{ border-bottom: 2px solid #dc3545; padding-bottom: 15px; margin-bottom: 20px; }}
+            h1 {{ color: #1e1e2d; font-size: 22px; margin: 0; }}
+            .subtitle {{ color: #6c757d; font-size: 14px; }}
+            .note {{ background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px 16px; border-radius: 6px; margin: 20px 0; font-size: 14px; color: #664d03; }}
+            .footer {{ margin-top: 30px; padding-top: 15px; border-top: 1px solid #dee2e6; font-size: 12px; color: #6c757d; text-align: center; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>📱 SMS Lists — Failed &amp; Intracking</h1>
+                <div class="subtitle">Generated on {today}</div>
+            </div>
+            <div class="note">
+                The following files are attached for the SMS team:
+                <ul>
+                    <li><strong>Failed_SMS.xlsx</strong> — clients with failed, disputed, or cancelled mandate payments</li>
+                    <li><strong>Intracking_SMS.xlsx</strong> — clients still being tracked</li>
+                </ul>
+            </div>
+            <div class="footer">Automated SMS lists from Debt Review Dashboard</div>
+        </div>
+    </body>
+    </html>
+    """
+
+# ---- Send main email ----
 def send_email():
     if not SENDGRID_API_KEY:
         print("❌ SENDGRID_API_KEY not set")
@@ -159,7 +196,6 @@ def send_email():
     html_body = create_html_body(metrics)
     today = datetime.now().strftime("%d %b %Y")
 
-    # ---- Try to attach the Excel report ----
     attachments = []
     try:
         xlsx_fh = download_from_drive("Debt_Review_Report.xlsx")
@@ -171,11 +207,10 @@ def send_email():
             "filename": f"Debt_Review_Report_{datetime.now().strftime('%Y%m%d')}.xlsx",
             "disposition": "attachment",
         })
-        print(f"📎 Attached Excel report ({len(xlsx_bytes) / 1024:.1f} KB)")
+        print(f"📎 Attached full report ({len(xlsx_bytes) / 1024:.1f} KB)")
     except Exception as e:
-        print(f"⚠️ Could not attach Excel report: {e}")
+        print(f"⚠️ Could not attach full Excel report: {e}")
 
-    url = "https://api.sendgrid.com/v3/mail/send"
     payload = {
         "personalizations": [{"to": [{"email": TO_EMAIL}]}],
         "from": {"email": FROM_EMAIL},
@@ -190,20 +225,77 @@ def send_email():
         "Content-Type": "application/json",
     }
 
-    print(f"🔍 Sending email to: {TO_EMAIL}")
-    print(f"🔍 From: {FROM_EMAIL}")
-
+    print(f"🔍 Sending main email to: {TO_EMAIL}")
     try:
-        response = requests.post(url, json=payload, headers=headers)
+        response = requests.post("https://api.sendgrid.com/v3/mail/send", json=payload, headers=headers)
         if response.status_code == 202:
-            print(f"✅ Email sent successfully to {TO_EMAIL}")
-            return True
+            print(f"✅ Main email sent to {TO_EMAIL}")
         else:
             print(f"❌ SendGrid error: {response.status_code} - {response.text}")
-            return False
     except Exception as e:
-        print(f"❌ Email failed: {e}")
+        print(f"❌ Main email failed: {e}")
+
+    return True
+
+# ---- Send SMS-only email ----
+def send_sms_email():
+    if not SENDGRID_API_KEY:
+        print("❌ SENDGRID_API_KEY not set — skipping SMS email")
         return False
+    if not TO_EMAIL_SMS:
+        print("⚠️ TO_EMAIL_SMS not set — skipping SMS email")
+        return False
+
+    today = datetime.now().strftime("%d %b %Y")
+    html_body = create_sms_email_body()
+
+    attachments = []
+    for drive_name, local_name in [
+        ("Failed_SMS.xlsx", "Failed_SMS"),
+        ("Intracking_SMS.xlsx", "Intracking_SMS"),
+    ]:
+        try:
+            fh = download_from_drive(drive_name)
+            b = fh.read()
+            b64 = base64.b64encode(b).decode("utf-8")
+            attachments.append({
+                "content": b64,
+                "type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "filename": f"{local_name}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                "disposition": "attachment",
+            })
+            print(f"📎 Attached {drive_name} ({len(b) / 1024:.1f} KB)")
+        except Exception as e:
+            print(f"⚠️ Could not attach {drive_name}: {e}")
+
+    if not attachments:
+        print("⚠️ No SMS attachments found — skipping SMS email")
+        return False
+
+    payload = {
+        "personalizations": [{"to": [{"email": TO_EMAIL_SMS}]}],
+        "from": {"email": FROM_EMAIL},
+        "subject": f"📱 SMS Lists (Failed & Intracking) - {today}",
+        "content": [{"type": "text/html", "value": html_body}],
+        "attachments": attachments,
+    }
+    headers = {
+        "Authorization": f"Bearer {SENDGRID_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    print(f"🔍 Sending SMS email to: {TO_EMAIL_SMS}")
+    try:
+        response = requests.post("https://api.sendgrid.com/v3/mail/send", json=payload, headers=headers)
+        if response.status_code == 202:
+            print(f"✅ SMS email sent to {TO_EMAIL_SMS}")
+        else:
+            print(f"❌ SendGrid error: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"❌ SMS email failed: {e}")
+
+    return True
 
 if __name__ == "__main__":
     send_email()
+    send_sms_email()
