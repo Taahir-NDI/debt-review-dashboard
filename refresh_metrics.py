@@ -17,14 +17,7 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 # 🆔 ID NORMALIZER — Keeps IDs as clean integer strings
 # ================================================================
 def normalize_id(val):
-    """
-    Convert any ID value to a clean integer-style string.
-    Handles:
-      - Excel numbers like 7801066006087 → "7801066006087"
-      - Excel floats like 7801066006087.0 → "7801066006087"
-      - Strings with trailing '.0' → "7801066006087"
-      - Empty/NaN → ""
-    """
+    """Convert any ID value to a clean integer-style string."""
     if pd.isna(val):
         return ""
     if isinstance(val, (int, np.integer)):
@@ -103,11 +96,17 @@ def find_columns(df):
     if status_col is None:
         status_col = df.columns[-1]
 
+    # ✅ FIX: Prefer "ID NUMBER" over "APPLICANT NUMBER"
     id_col = None
     for col in df.columns:
-        if str(col).strip().upper() == "APPLICANT NUMBER":
+        if str(col).strip().upper() == "ID NUMBER":
             id_col = col
             break
+    if id_col is None:
+        for col in df.columns:
+            if str(col).strip().upper() == "APPLICANT NUMBER":
+                id_col = col
+                break
     if id_col is None:
         for col in df.columns:
             if "number" in str(col).lower() or "id" in str(col).lower():
@@ -191,9 +190,7 @@ def build_report(fee_content, payment_content):
         if col not in fee_base.columns:
             fee_base[col] = ""
 
-    # ---- FIX 2: Use normalize_id for clean IDs ----
     fee_base["id_number"] = fee_base["id_number"].apply(normalize_id)
-
     fee_base["payment_stage"] = pd.to_numeric(fee_base["payment_stage"], errors="coerce")
     fee_base["amount"] = pd.to_numeric(fee_base["amount"], errors="coerce")
     fee_base["collection_date"] = pd.to_datetime(fee_base["collection_date"], errors="coerce")
@@ -216,13 +213,12 @@ def build_report(fee_content, payment_content):
         p_id_col: "id_number", p_stage_col: "payment_stage", p_amt_col: "amount",
         p_s_col: "status", p_date_col: "collection_date"
     })
-    # ---- FIX 2: Clean ID ----
     pmt["id_number"] = pmt["id_number"].apply(normalize_id)
     pmt["payment_stage"] = pd.to_numeric(pmt["payment_stage"], errors="coerce")
     pmt["amount"] = pd.to_numeric(pmt["amount"], errors="coerce")
     pmt["collection_date"] = pd.to_datetime(pmt["collection_date"], errors="coerce")
 
-    # ---- SMS lists (from Payment Report) ----
+    # SMS lists (from Payment Report)
     sms_cols = ["id_number", "client_name", "cell", "payment_stage", "amount", "status"]
     pmt_sms = pay_df.rename(columns={
         p_id_col: "id_number", p_name_col: "client_name", p_cell_col: "cell",
@@ -232,24 +228,21 @@ def build_report(fee_content, payment_content):
     pmt_sms["payment_stage"] = pd.to_numeric(pmt_sms["payment_stage"], errors="coerce")
     pmt_sms["amount"] = pd.to_numeric(pmt_sms["amount"], errors="coerce")
     pmt_sms["collection_date"] = pd.to_datetime(pmt_sms["collection_date"], errors="coerce")
-    # ---- FIX 2: Clean ID ----
     pmt_sms["id_number"] = pmt_sms["id_number"].apply(normalize_id)
     pmt_sms = pmt_sms.dropna(subset=["id_number", "payment_stage", "amount"])
 
     # ================================================================
-    # ✅ FIX 1: Include ALL Failed/Disputed clients from Payment Status Report
+    # Failed SMS list — includes ALL Failed/Disputed clients
     # ================================================================
-    # No date restriction — the entire Payment Status Report is scanned.
     failed_keywords = ["FAILED", "FAIL", "DECLINED", "REJECTED", "DISPUTED", "CLIENT CANCELLED MANDATE"]
     failed_mask = pmt_sms["status"].str.upper().str.contains("|".join(failed_keywords), na=False)
     failed_pmt = pmt_sms[failed_mask].copy()
-    # ^^^ That's it. No `.between(last_friday, today)` filter anymore.
+    # (No date filter — all failures included)
 
     tracking_mask = pmt_sms["status"].str.upper().str.contains("TRACKING|INTRACKING", na=False)
     tracking_pmt = pmt_sms[tracking_mask].copy()
 
     def latest_per_client(df):
-        """Keep the most recent row per client (by collection_date)."""
         if df.empty:
             return df
         return df.sort_values("collection_date").groupby("id_number").tail(1).reset_index(drop=True)
