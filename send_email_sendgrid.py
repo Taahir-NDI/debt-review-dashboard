@@ -1,9 +1,10 @@
 # ================================================================
-# 📧 SEND EMAIL VIA SENDGRID — Reads metrics from Google Drive
+# 📧 SEND EMAIL VIA SENDGRID — with Excel attachment
 # ================================================================
 
 import os
 import io
+import base64
 from datetime import datetime
 import requests
 import pandas as pd
@@ -18,21 +19,13 @@ TO_EMAIL = os.getenv("TO_EMAIL")
 DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://your-dashboard.streamlit.app")
 FOLDER_ID = os.getenv("FOLDER_ID")
 
-# ---- Fallback metrics (if Drive read fails) ----
 DEFAULT_METRICS = {
-    "settled_mtd_v": 0,
-    "failed_mtd_v": 0,
-    "success_rate": 0,
-    "revenue_total": 0,
-    "current_debits_v": 0,
-    "next_debits_v": 0,
-    "tracking_c": 0,
-    "failed_cycle_c": 0,
+    "settled_mtd_v": 0, "failed_mtd_v": 0, "success_rate": 0,
+    "revenue_total": 0, "current_debits_v": 0, "next_debits_v": 0,
+    "tracking_c": 0, "failed_cycle_c": 0,
 }
 
-# ================================================================
-# 🔐 Google Drive helpers
-# ================================================================
+# ---- Google Drive ----
 def get_drive_service():
     creds_info = {
         "type": "service_account",
@@ -43,39 +36,32 @@ def get_drive_service():
         "client_id": os.getenv("CLIENT_ID"),
         "auth_uri": os.getenv("AUTH_URI", "https://accounts.google.com/o/oauth2/auth"),
         "token_uri": os.getenv("TOKEN_URI", "https://oauth2.googleapis.com/token"),
-        "auth_provider_x509_cert_url": os.getenv(
-            "AUTH_PROVIDER_X509_CERT_URL",
-            "https://www.googleapis.com/oauth2/v1/certs"
-        ),
+        "auth_provider_x509_cert_url": os.getenv("AUTH_PROVIDER_X509_CERT_URL", "https://www.googleapis.com/oauth2/v1/certs"),
         "client_x509_cert_url": os.getenv("CLIENT_X509_CERT_URL"),
     }
     creds = service_account.Credentials.from_service_account_info(creds_info)
     return build("drive", "v3", credentials=creds)
 
-def download_metrics_from_drive():
-    """Download metrics_history.csv from the Google Drive folder."""
+def download_from_drive(file_name):
     service = get_drive_service()
-    query = f"'{FOLDER_ID}' in parents and name = 'metrics_history.csv' and trashed = false"
+    query = f"'{FOLDER_ID}' in parents and name = '{file_name}' and trashed = false"
     results = service.files().list(q=query, fields="files(id, name)").execute()
     files = results.get("files", [])
     if not files:
-        raise Exception("metrics_history.csv not found on Google Drive.")
-    file_id = files[0]["id"]
-    request = service.files().get_media(fileId=file_id)
+        raise Exception(f"{file_name} not found on Google Drive.")
+    request = service.files().get_media(fileId=files[0]["id"])
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
     done = False
     while not done:
         _, done = downloader.next_chunk()
     fh.seek(0)
-    return pd.read_csv(fh)
+    return fh
 
-# ================================================================
-# 📊 Generate summary from Drive metrics
-# ================================================================
-def generate_summary():
+def get_metrics():
     try:
-        df = download_metrics_from_drive()
+        fh = download_from_drive("metrics_history.csv")
+        df = pd.read_csv(fh)
         if len(df) > 0:
             latest = df.sort_values("report_date").iloc[-1]
             return {
@@ -88,14 +74,11 @@ def generate_summary():
                 "tracking_c": float(latest.get("tracking_c", 0) or 0),
                 "failed_cycle_c": float(latest.get("failed_cycle_c", 0) or 0),
             }
-        print("⚠️ Metrics history is empty – using fallback values.")
     except Exception as e:
         print(f"⚠️ Could not read metrics from Drive: {e}")
     return DEFAULT_METRICS
 
-# ================================================================
-# 🎨 HTML email body
-# ================================================================
+# ---- HTML body ----
 def create_html_body(metrics):
     today = datetime.now().strftime("%d %B %Y")
     return f"""
@@ -154,15 +137,16 @@ def create_html_body(metrics):
             <div style="text-align: center; margin-top: 15px;">
                 <a href="{DASHBOARD_URL}" class="btn">View Full Dashboard →</a>
             </div>
-            <div class="footer">Automated report from Debt Review Dashboard · Data refreshed from Google Drive</div>
+            <div class="footer">
+                Automated report from Debt Review Dashboard · Data refreshed from Google Drive<br>
+                📎 Full Excel report attached.
+            </div>
         </div>
     </body>
     </html>
     """
 
-# ================================================================
-# 📤 Send email via SendGrid
-# ================================================================
+# ---- Send email ----
 def send_email():
     if not SENDGRID_API_KEY:
         print("❌ SENDGRID_API_KEY not set")
@@ -171,9 +155,25 @@ def send_email():
         print("❌ TO_EMAIL not set")
         return False
 
-    metrics = generate_summary()
+    metrics = get_metrics()
     html_body = create_html_body(metrics)
     today = datetime.now().strftime("%d %b %Y")
+
+    # ---- Try to attach the Excel report ----
+    attachments = []
+    try:
+        xlsx_fh = download_from_drive("Debt_Review_Report.xlsx")
+        xlsx_bytes = xlsx_fh.read()
+        xlsx_b64 = base64.b64encode(xlsx_bytes).decode("utf-8")
+        attachments.append({
+            "content": xlsx_b64,
+            "type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "filename": f"Debt_Review_Report_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            "disposition": "attachment",
+        })
+        print(f"📎 Attached Excel report ({len(xlsx_bytes) / 1024:.1f} KB)")
+    except Exception as e:
+        print(f"⚠️ Could not attach Excel report: {e}")
 
     url = "https://api.sendgrid.com/v3/mail/send"
     payload = {
@@ -182,6 +182,9 @@ def send_email():
         "subject": f"📊 Debt Review Report - {today}",
         "content": [{"type": "text/html", "value": html_body}],
     }
+    if attachments:
+        payload["attachments"] = attachments
+
     headers = {
         "Authorization": f"Bearer {SENDGRID_API_KEY}",
         "Content-Type": "application/json",
