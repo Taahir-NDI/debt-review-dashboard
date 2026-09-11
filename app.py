@@ -30,7 +30,6 @@ class GenericSMSProvider:
         self.from_number = from_number
 
     def send(self, to_number, message):
-        """Send an SMS to a single recipient via HTTP API."""
         payload = {
             "api_key": self.api_key,
             "from": self.from_number,
@@ -41,88 +40,24 @@ class GenericSMSProvider:
         return response.json()
 
 # ================================================================
-# 0. CUSTOM STYLES (CSS) — Only boxes, no background overrides
+# 0. CUSTOM STYLES
 # ================================================================
 st.set_page_config(page_title="Debt Review Dashboard", layout="wide")
 
 st.markdown("""
 <style>
-    .metric-card {
-        background-color: #ffffff;
-        border-radius: 12px;
-        padding: 16px 20px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-        margin-bottom: 10px;
-        border-left: 4px solid #4e8cff;
-        transition: box-shadow 0.2s;
-    }
-    .metric-card:hover {
-        box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-    }
-    .metric-label {
-        font-size: 14px;
-        color: #8a8a8a;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.3px;
-    }
-    .metric-value {
-        font-size: 28px;
-        font-weight: 700;
-        color: #1e1e2d;
-        margin-top: 4px;
-    }
-    .metric-delta {
-        font-size: 14px;
-        color: #4e8cff;
-        font-weight: 500;
-        margin-top: 2px;
-    }
-    .metric-delta.positive { color: #28a745; }
-    .metric-delta.negative { color: #dc3545; }
-
-    .chart-container {
-        background-color: #ffffff;
-        border-radius: 12px;
-        padding: 16px 20px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-        margin-bottom: 20px;
-    }
-
-    .dataframe {
-        border: none !important;
-        font-size: 14px !important;
-    }
-    .dataframe thead tr th {
-        background-color: #f8f9fa !important;
-        color: #1e1e2d !important;
-        font-weight: 600 !important;
-        border-bottom: 2px solid #dee2e6 !important;
-    }
-    .dataframe tbody tr {
-        border-bottom: 1px solid #f1f3f5 !important;
-    }
-    .dataframe tbody tr:hover {
-        background-color: #f8f9fa !important;
-    }
-    .dataframe tbody tr:nth-child(even) {
-        background-color: #fcfcfc !important;
-    }
-
-    .main-header {
-        margin-bottom: 24px;
-    }
-    .main-header h1 {
-        font-size: 28px;
-        font-weight: 700;
-        color: #1e1e2d;
-    }
-    .main-header .greeting {
-        font-size: 16px;
-        color: #6c757d;
-        margin-top: -4px;
-    }
-
+    .metric-card { background-color: #ffffff; border-radius: 12px; padding: 16px 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 10px; border-left: 4px solid #4e8cff; transition: box-shadow 0.2s; }
+    .metric-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
+    .metric-label { font-size: 14px; color: #8a8a8a; font-weight: 500; text-transform: uppercase; letter-spacing: 0.3px; }
+    .metric-value { font-size: 28px; font-weight: 700; color: #1e1e2d; margin-top: 4px; }
+    .metric-delta { font-size: 14px; color: #4e8cff; font-weight: 500; margin-top: 2px; }
+    .chart-container { background-color: #ffffff; border-radius: 12px; padding: 16px 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 20px; }
+    .dataframe { border: none !important; font-size: 14px !important; }
+    .dataframe thead tr th { background-color: #f8f9fa !important; color: #1e1e2d !important; font-weight: 600 !important; border-bottom: 2px solid #dee2e6 !important; }
+    .dataframe tbody tr:hover { background-color: #f8f9fa !important; }
+    .main-header { margin-bottom: 24px; }
+    .main-header h1 { font-size: 28px; font-weight: 700; color: #1e1e2d; }
+    .main-header .greeting { font-size: 16px; color: #6c757d; margin-top: -4px; }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
@@ -141,7 +76,6 @@ st.sidebar.markdown("""
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Month Selection")
-
 single_month_mode = st.sidebar.checkbox("📌 Single Month Mode", value=False)
 
 st.sidebar.markdown("---")
@@ -152,12 +86,7 @@ if forecast_mode:
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📆 Date Range")
-
-date_mode = st.sidebar.radio(
-    "Date Mode",
-    ["Current Date", "Custom Range"],
-    index=0
-)
+date_mode = st.sidebar.radio("Date Mode", ["Current Date", "Custom Range"], index=0)
 
 if date_mode == "Custom Range":
     today_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -177,9 +106,8 @@ else:
     date_range = None
 
 # ================================================================
-# 2. GOOGLE DRIVE AUTHENTICATION & DOWNLOAD (FOLDER ID METHOD)
+# 2. GOOGLE DRIVE AUTHENTICATION & DOWNLOAD
 # ================================================================
-
 def download_file_from_drive(service, file_id):
     request = service.files().get_media(fileId=file_id)
     fh = io.BytesIO()
@@ -191,7 +119,6 @@ def download_file_from_drive(service, file_id):
     return fh
 
 def get_file_id_from_folder(service, folder_id, file_name):
-    """Find a file by name inside a Google Drive folder."""
     query = f"'{folder_id}' in parents and name = '{file_name}' and trashed = false"
     results = service.files().list(q=query, fields="files(id, name)").execute()
     files = results.get('files', [])
@@ -217,23 +144,18 @@ try:
     }
     creds = service_account.Credentials.from_service_account_info(creds_info)
     service = build('drive', 'v3', credentials=creds)
-
     folder_id = st.secrets["FOLDER_ID"]
-    
     fee_file_id = get_file_id_from_folder(service, folder_id, "Monthly Fees Audit.xlsx")
     if not forecast_mode:
         payment_file_id = get_file_id_from_folder(service, folder_id, "Payment Status Report.xlsx")
     else:
         payment_file_id = None
-
     fee_content = download_file_from_drive(service, fee_file_id)
     if not forecast_mode and payment_file_id is not None:
         payment_content = download_file_from_drive(service, payment_file_id)
     else:
         payment_content = None
-
     drive_connected = True
-
 except Exception as e:
     st.error(f"❌ Error connecting to Google Drive: {e}")
     st.stop()
@@ -243,7 +165,9 @@ if drive_connected:
 else:
     st.warning("⚠️ Not connected to Google Drive")
 
+# ================================================================
 # ---- Helper functions ----
+# ================================================================
 def find_sheet(variants, all_sheets):
     for sheet in all_sheets:
         sheet_upper = sheet.upper()
@@ -253,20 +177,12 @@ def find_sheet(variants, all_sheets):
     return None
 
 def find_columns(df):
-    """
-    Detect columns with priority for exact names found in the Payment Status Report.
-    """
-    # Convert column names to uppercase for case-insensitive matching
-    cols_upper = {col: col for col in df.columns}  # original name -> original name
-
-    # ---- Priority exact matches ----
     status_col = None
     for col in df.columns:
         if col.strip().upper() == 'COLLECTION STATUS':
             status_col = col
             break
     if status_col is None:
-        # fallback to generic search
         for col in df.columns:
             col_lower = str(col).lower()
             if 'note' in col_lower or 'feedback' in col_lower or 'status' in col_lower:
@@ -357,14 +273,11 @@ def find_columns(df):
 def extract_future_debits(df, sheet_name, filter_future=True):
     if df is None or df.empty:
         return pd.DataFrame()
-    
     status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col = find_columns(df)
-    
     df_temp = df.copy()
     df_temp = df_temp[df_temp[id_col].notna()]
     df_temp = df_temp[df_temp[id_col].astype(str).str.strip() != '']
     df_temp = df_temp[~df_temp[id_col].astype(str).str.upper().str.contains('ID|TOTAL|SUB', na=False)]
-    
     if filter_future:
         future_mask = df_temp[status_col].astype(str).str.upper().str.contains('FUTURE', na=False)
         df_future = df_temp[future_mask].copy()
@@ -373,39 +286,34 @@ def extract_future_debits(df, sheet_name, filter_future=True):
         if status_col in df_future.columns:
             cancel_mask = df_future[status_col].astype(str).str.upper().str.contains('CANCELLED', na=False)
             df_future = df_future[~cancel_mask]
-    
     if df_future.empty:
         return pd.DataFrame()
-    
     df_future['payment_stage'] = pd.to_numeric(df_future[stage_col], errors='coerce')
     df_future = df_future[df_future['payment_stage'].isin([1, 2])].copy()
-    
     if date_col is not None:
         df_future['due_date'] = pd.to_datetime(df_future[date_col], errors='coerce')
     else:
         df_future['due_date'] = pd.NaT
-    
     df_future['id_number'] = df_future[id_col].astype(str).str.strip()
     df_future['amount'] = pd.to_numeric(df_future[amount_col], errors='coerce')
-    
     if name_col is not None:
         df_future['client_name'] = df_future[name_col]
     else:
         df_future['client_name'] = ''
-    
     if cell_col is not None:
         df_future['cell'] = df_future[cell_col]
     else:
         df_future['cell'] = ''
-    
     df_future = df_future.dropna(subset=['id_number', 'payment_stage', 'due_date', 'amount'])
     df_future['sheet_source'] = sheet_name
     return df_future
 
+# ================================================================
 # ---- Core processing function (cached) ----
+# ================================================================
 @st.cache_data
 def process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode=False, ref_date=None, forecast_mode=False, date_range=None):
-    # ---- Helper functions defined at the top ----
+
     def get_settled_df(df, start_date=None, end_date=None):
         temp = df[df['status'].str.upper() == 'SETTLED']
         if start_date and end_date:
@@ -427,6 +335,20 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             temp = temp[temp['collection_date'] <= end_date]
         return temp
 
+    def get_cancelled_mandate_df(df, start_date=None, end_date=None):
+        temp = df[df['status'].str.upper().str.contains('CLIENT CANCELLED MANDATE', na=False)]
+        if start_date and end_date:
+            temp = temp[temp['collection_date'] >= start_date]
+            temp = temp[temp['collection_date'] <= end_date]
+        return temp
+
+    def get_sale_not_submitted_df(df, start_date=None, end_date=None):
+        temp = df[df['status'].str.upper().str.contains('SALE NOT SUBMITTED', na=False)]
+        if start_date and end_date:
+            temp = temp[temp['collection_date'] >= start_date]
+            temp = temp[temp['collection_date'] <= end_date]
+        return temp
+
     def get_unique_stage_clients(df, status_filter=None, date_col=None, start_date=None, end_date=None):
         temp = df.copy()
         if status_filter:
@@ -436,12 +358,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             temp = temp[temp[date_col] <= end_date]
         if not temp.empty:
             grouped = temp.groupby('id_number').agg({
-                'client_name': 'first',
-                'cell': 'first',
-                'payment_stage': 'first',
-                'amount': 'sum',
-                'status': 'first',
-                'collection_date': 'max'
+                'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
+                'amount': 'sum', 'status': 'first', 'collection_date': 'max'
             }).reset_index()
             return grouped
         else:
@@ -474,19 +392,15 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         start_dt = None
         end_dt = None
 
-    # ---- Read fee audit sheets ----
     fee_df_current = pd.read_excel(fee_content, sheet_name=current_sheet)
-    
     fee_df_next = None
     if not single_month_mode and next_sheet is not None:
         fee_df_next = pd.read_excel(fee_content, sheet_name=next_sheet)
-    
-    # ---- Extract future debits for normal mode ----
+
     future_current = extract_future_debits(fee_df_current, current_sheet, filter_future=True)
     future_next = extract_future_debits(fee_df_next, next_sheet, filter_future=False) if fee_df_next is not None else pd.DataFrame()
     all_future = pd.concat([future_current, future_next], ignore_index=True)
 
-    # ---- Status-based data from current sheet ----
     status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col = find_columns(fee_df_current)
     future_mask_current = fee_df_current[status_col].astype(str).str.upper().str.contains('FUTURE', na=False)
     fee_status_df = fee_df_current[~future_mask_current].copy()
@@ -494,7 +408,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     fee_status_df = fee_status_df[fee_status_df[status_col].astype(str).str.strip() != '']
     fee_status_df = fee_status_df[~fee_status_df[status_col].astype(str).str.upper().str.contains('TOTAL', na=False)]
     fee_status_df = fee_status_df[fee_status_df[id_col].astype(str).str.strip() != id_col]
-    
+
     fee_base_cols = [id_col, stage_col, amount_col, status_col]
     if date_col is not None:
         fee_base_cols.append(date_col)
@@ -502,29 +416,23 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         fee_base_cols.append(name_col)
     if cell_col is not None:
         fee_base_cols.append(cell_col)
-    
+
     fee_base = fee_status_df[fee_base_cols].copy()
-    fee_base.rename(columns={
-        id_col: 'id_number',
-        stage_col: 'payment_stage',
-        amount_col: 'amount',
-        status_col: 'status'
-    }, inplace=True)
+    fee_base.rename(columns={id_col: 'id_number', stage_col: 'payment_stage', amount_col: 'amount', status_col: 'status'}, inplace=True)
     if date_col is not None:
         fee_base.rename(columns={date_col: 'collection_date'}, inplace=True)
     if name_col is not None:
         fee_base.rename(columns={name_col: 'client_name'}, inplace=True)
     if cell_col is not None:
         fee_base.rename(columns={cell_col: 'cell'}, inplace=True)
-    
+
     fee_base['payment_stage'] = pd.to_numeric(fee_base['payment_stage'], errors='coerce')
     if 'collection_date' in fee_base.columns:
         fee_base['collection_date'] = pd.to_datetime(fee_base['collection_date'], errors='coerce')
     fee_base['id_number'] = fee_base['id_number'].astype(str).str.strip()
     fee_base['status'] = fee_base['status'].astype(str).str.strip()
     fee_base = fee_base.dropna(subset=['id_number', 'payment_stage'])
-    
-    # ---- Merge with payment report (if not forecast_mode) ----
+
     if forecast_mode:
         raw = fee_base.copy()
         for col in ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status', 'collection_date']:
@@ -532,9 +440,9 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                 raw[col] = '' if col in ['client_name', 'cell', 'status'] else 0
         raw['due_date'] = raw['collection_date']
         raw['effective_settlement_date'] = raw['collection_date']
-        # In forecast mode, no Payment Report, so SMS lists stay empty
         failed_sms_pmt = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
         tracking_sms_pmt = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
+        sale_not_submitted_sms_pmt = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
         pmt_debug = None
     else:
         try:
@@ -544,70 +452,54 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                 df_pmt = pd.read_excel(payment_content, header=3)
             except:
                 df_pmt = pd.read_excel(payment_content)
-        
+
         raw_pmt = df_pmt.copy()
-        
-        # ================================================================
-        # 🔧 EXTRACT SMS LISTS FROM PAYMENT STATUS REPORT
-        # ================================================================
-        # Detect columns using the improved find_columns
+
         pmt_status_col, pmt_id_col, pmt_amount_col, pmt_stage_col, pmt_date_col, pmt_name_col, pmt_cell_col = find_columns(df_pmt)
 
-        # Create a clean copy for SMS extraction
         pmt_sms = df_pmt.copy()
         pmt_sms.rename(columns={
-            pmt_id_col: 'id_number',
-            pmt_name_col: 'client_name',
-            pmt_cell_col: 'cell',
-            pmt_stage_col: 'payment_stage',
-            pmt_amount_col: 'amount',
-            pmt_status_col: 'status',
-            pmt_date_col: 'collection_date'
+            pmt_id_col: 'id_number', pmt_name_col: 'client_name', pmt_cell_col: 'cell',
+            pmt_stage_col: 'payment_stage', pmt_amount_col: 'amount',
+            pmt_status_col: 'status', pmt_date_col: 'collection_date'
         }, inplace=True)
 
-        # Clean data types
         pmt_sms['payment_stage'] = pd.to_numeric(pmt_sms['payment_stage'], errors='coerce')
         pmt_sms['amount'] = pd.to_numeric(pmt_sms['amount'], errors='coerce')
         pmt_sms['collection_date'] = pd.to_datetime(pmt_sms['collection_date'], errors='coerce')
         pmt_sms['id_number'] = pmt_sms['id_number'].astype(str).str.strip()
         pmt_sms = pmt_sms.dropna(subset=['id_number', 'payment_stage', 'amount'])
 
-        # --- For debugging: store the raw Payment Report info ---
         pmt_debug = {
-            'columns_detected': {
-                'status': pmt_status_col,
-                'id': pmt_id_col,
-                'amount': pmt_amount_col,
-                'stage': pmt_stage_col,
-                'date': pmt_date_col,
-                'name': pmt_name_col,
-                'cell': pmt_cell_col
-            },
+            'columns_detected': {'status': pmt_status_col, 'id': pmt_id_col, 'amount': pmt_amount_col,
+                                 'stage': pmt_stage_col, 'date': pmt_date_col, 'name': pmt_name_col, 'cell': pmt_cell_col},
             'sample_rows': df_pmt.head(5).to_dict('records'),
             'unique_statuses': sorted(pmt_sms['status'].dropna().unique().tolist()) if not pmt_sms.empty else [],
             'pmt_sms_sample': pmt_sms.head(5).to_dict('records') if not pmt_sms.empty else [],
-            'failed_count': 0,
-            'tracking_count': 0,
-            'disputed_count': 0
+            'failed_count': 0, 'tracking_count': 0, 'disputed_count': 0,
+            'cancelled_mandate_count': 0, 'sale_not_submitted_count': 0
         }
 
-        # --- Extract Failed (including Disputed) ---
-        failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED', 'DISPUTED']
+        # --- Failed SMS list now includes FAILED, DISPUTED, and CLIENT CANCELLED MANDATE ---
+        failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED', 'DISPUTED', 'CLIENT CANCELLED MANDATE']
         failed_mask = pmt_sms['status'].str.upper().str.contains('|'.join(failed_keywords), na=False)
         failed_pmt = pmt_sms[failed_mask].copy()
         pmt_debug['failed_count'] = len(failed_pmt)
 
-        # --- Extract Tracking/Intracking ---
+        # --- Tracking/Intracking ---
         tracking_keywords = ['TRACKING', 'INTRACKING', 'PENDING', 'OUTSTANDING']
         tracking_mask = pmt_sms['status'].str.upper().str.contains('|'.join(tracking_keywords), na=False)
         tracking_pmt = pmt_sms[tracking_mask].copy()
         pmt_debug['tracking_count'] = len(tracking_pmt)
 
-        # Count Disputed separately (for debug)
-        disputed_mask = pmt_sms['status'].str.upper().str.contains('DISPUTED', na=False)
-        pmt_debug['disputed_count'] = int(disputed_mask.sum())
+        # --- Sale Not Submitted (separate list, no SMS) ---
+        sale_not_submitted_mask = pmt_sms['status'].str.upper().str.contains('SALE NOT SUBMITTED', na=False)
+        sale_not_submitted_pmt = pmt_sms[sale_not_submitted_mask].copy()
 
-        # For each client, take the latest record (most recent collection date)
+        pmt_debug['disputed_count'] = int(pmt_sms['status'].str.upper().str.contains('DISPUTED', na=False).sum())
+        pmt_debug['cancelled_mandate_count'] = int(pmt_sms['status'].str.upper().str.contains('CLIENT CANCELLED MANDATE', na=False).sum())
+        pmt_debug['sale_not_submitted_count'] = int(sale_not_submitted_mask.sum())
+
         def get_latest_per_client(df):
             if df.empty:
                 return df
@@ -616,13 +508,14 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
 
         failed_pmt_unique = get_latest_per_client(failed_pmt)
         tracking_pmt_unique = get_latest_per_client(tracking_pmt)
+        sale_not_submitted_unique = get_latest_per_client(sale_not_submitted_pmt)
 
-        # Select and rename columns for display
         sms_cols = ['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status']
+
         failed_sms_pmt = failed_pmt_unique[sms_cols].copy() if not failed_pmt_unique.empty else pd.DataFrame(columns=sms_cols)
         tracking_sms_pmt = tracking_pmt_unique[sms_cols].copy() if not tracking_pmt_unique.empty else pd.DataFrame(columns=sms_cols)
+        sale_not_submitted_sms_pmt = sale_not_submitted_unique[sms_cols].copy() if not sale_not_submitted_unique.empty else pd.DataFrame(columns=sms_cols)
 
-        # Rename to match the dashboard's expected column names
         if not failed_sms_pmt.empty:
             failed_sms_pmt.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
         else:
@@ -633,10 +526,12 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         else:
             tracking_sms_pmt = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
 
-        # ================================================================
-        # END of SMS extraction from Payment Report
-        # ================================================================
-        
+        if not sale_not_submitted_sms_pmt.empty:
+            sale_not_submitted_sms_pmt.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status']
+        else:
+            sale_not_submitted_sms_pmt = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
+
+        # ---- Prepare raw payment data for merge ----
         payment_id_col = None
         for col in raw_pmt.columns:
             if col.strip().upper() == 'ID NUMBER':
@@ -655,48 +550,32 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         if payment_id_col is None:
             payment_id_col = raw_pmt.columns[0]
         raw_pmt.rename(columns={payment_id_col: 'id_number'}, inplace=True)
-        
+
         col_map = {
-            'APPLICANT NAME': 'client_name_pmt',
-            'CELL': 'cell_pmt',
-            'INSTALLMENT NO': 'payment_stage_pmt',
-            'TOTAL INSTALMENTS LOADED': 'total_instalments',
-            'INSTALMENT AMOUNT': 'amount_pmt',
-            'COLLECTION STATUS': 'status_pmt',
-            'COLLECTION DATE': 'collection_date_pmt',
-            'SETTLEMENT DATE': 'settlement_date_pmt',
-            'DISPUTE DATE': 'dispute_date_pmt',
-            'Tracking Days Used': 'tracking_days',
-            'Cancelled Date': 'cancelled_date_pmt',
-            'Mandate Consumer Bank': 'bank'
+            'APPLICANT NAME': 'client_name_pmt', 'CELL': 'cell_pmt',
+            'INSTALLMENT NO': 'payment_stage_pmt', 'TOTAL INSTALMENTS LOADED': 'total_instalments',
+            'INSTALMENT AMOUNT': 'amount_pmt', 'COLLECTION STATUS': 'status_pmt',
+            'COLLECTION DATE': 'collection_date_pmt', 'SETTLEMENT DATE': 'settlement_date_pmt',
+            'DISPUTE DATE': 'dispute_date_pmt', 'Tracking Days Used': 'tracking_days',
+            'Cancelled Date': 'cancelled_date_pmt', 'Mandate Consumer Bank': 'bank'
         }
         for old, new in col_map.items():
             if old in raw_pmt.columns:
                 raw_pmt.rename(columns={old: new}, inplace=True)
-        
+
         raw_pmt['id_number'] = raw_pmt['id_number'].astype(str).str.strip()
         raw_pmt['payment_stage_pmt'] = pd.to_numeric(raw_pmt['payment_stage_pmt'], errors='coerce')
-        
+
         pmt_cols = ['id_number', 'payment_stage_pmt', 'collection_date_pmt', 'settlement_date_pmt',
                     'dispute_date_pmt', 'cell_pmt', 'client_name_pmt', 'amount_pmt', 'status_pmt',
                     'total_instalments', 'tracking_days', 'cancelled_date_pmt', 'bank']
         pmt_cols_existing = [c for c in pmt_cols if c in raw_pmt.columns]
         pmt_data = raw_pmt[pmt_cols_existing].copy()
         pmt_data = pmt_data.drop_duplicates(subset=['id_number', 'payment_stage_pmt'], keep='first')
-        pmt_data.rename(columns={
-            'payment_stage_pmt': 'payment_stage',
-            'collection_date_pmt': 'collection_date_pmt',
-            'settlement_date_pmt': 'settlement_date_pmt',
-            'dispute_date_pmt': 'dispute_date_pmt',
-            'cell_pmt': 'cell_pmt',
-            'client_name_pmt': 'client_name_pmt',
-            'amount_pmt': 'amount_pmt',
-            'status_pmt': 'status_pmt',
-            'cancelled_date_pmt': 'cancelled_date_pmt'
-        }, inplace=True)
-        
+        pmt_data.rename(columns={'payment_stage_pmt': 'payment_stage'}, inplace=True)
+
         merged = fee_base.merge(pmt_data, on=['id_number', 'payment_stage'], how='left')
-        
+
         if 'client_name' in merged.columns and 'client_name_pmt' in merged.columns:
             merged['client_name'] = merged['client_name'].fillna(merged['client_name_pmt'])
         elif 'client_name_pmt' in merged.columns:
@@ -709,48 +588,36 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             merged['collection_date'] = merged['collection_date'].fillna(merged['collection_date_pmt'])
         elif 'collection_date_pmt' in merged.columns:
             merged['collection_date'] = merged['collection_date_pmt']
-        
-        if 'settlement_date_pmt' in merged.columns:
-            merged['settlement_date'] = merged['settlement_date_pmt']
-        else:
-            merged['settlement_date'] = pd.NaT
-        if 'dispute_date_pmt' in merged.columns:
-            merged['dispute_date'] = merged['dispute_date_pmt']
-        else:
-            merged['dispute_date'] = pd.NaT
-        if 'cancelled_date_pmt' in merged.columns:
-            merged['cancelled_date'] = merged['cancelled_date_pmt']
-        else:
-            merged['cancelled_date'] = pd.NaT
-        
-        drop_cols = ['client_name_pmt', 'cell_pmt', 'amount_pmt', 'status_pmt', 
-                     'collection_date_pmt', 'settlement_date_pmt', 'dispute_date_pmt',
-                     'cancelled_date_pmt']
+
+        merged['settlement_date'] = merged['settlement_date_pmt'] if 'settlement_date_pmt' in merged.columns else pd.NaT
+        merged['dispute_date'] = merged['dispute_date_pmt'] if 'dispute_date_pmt' in merged.columns else pd.NaT
+        merged['cancelled_date'] = merged['cancelled_date_pmt'] if 'cancelled_date_pmt' in merged.columns else pd.NaT
+
+        drop_cols = ['client_name_pmt', 'cell_pmt', 'amount_pmt', 'status_pmt',
+                     'collection_date_pmt', 'settlement_date_pmt', 'dispute_date_pmt', 'cancelled_date_pmt']
         merged.drop(columns=[c for c in drop_cols if c in merged.columns], inplace=True, errors='ignore')
-        
-        cancelled_keywords = ['cancelled', 'Cancelled', 'CANCELLED', 
-                              'RMS - Cancelled', 'RMS - Cancelled - Inactive']
+
+        cancelled_keywords = ['cancelled', 'Cancelled', 'CANCELLED', 'RMS - Cancelled', 'RMS - Cancelled - Inactive']
         cancelled_mask = merged['status'].astype(str).str.contains('|'.join(cancelled_keywords), na=False)
         merged = merged[~cancelled_mask].copy()
-        
+
         if merged.empty:
             return None
-        
+
         raw = merged
-    
+
     raw['payment_stage'] = pd.to_numeric(raw['payment_stage'], errors='coerce')
     raw['amount'] = pd.to_numeric(raw['amount'], errors='coerce')
     for col in ['collection_date', 'settlement_date', 'dispute_date', 'cancelled_date']:
         if col in raw.columns:
             raw[col] = pd.to_datetime(raw[col], errors='coerce')
     raw['due_date'] = raw['collection_date']
-    
+
     if 'settlement_date' in raw.columns and not forecast_mode:
         raw['effective_settlement_date'] = raw['settlement_date'].fillna(raw['collection_date'])
     else:
         raw['effective_settlement_date'] = raw['collection_date']
-    
-    # ---- Apply date range filtering for status metrics ----
+
     if use_custom_range:
         raw = raw[raw['effective_settlement_date'] >= start_dt]
         raw = raw[raw['effective_settlement_date'] <= end_dt]
@@ -761,26 +628,24 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         raw = raw[raw['collection_date'] <= today]
         raw = raw[raw['effective_settlement_date'] <= today]
         raw = raw[raw['due_date'] <= today]
-    
+
     raw_stage_1_2 = raw[raw['payment_stage'].isin([1, 2])].copy()
-    
+
     settled_all = raw[raw['status'].str.upper() == 'SETTLED'].copy()
     settled_all = settled_all.sort_values(['id_number', 'effective_settlement_date'])
     settled_all['settlement_rank'] = settled_all.groupby('id_number').cumcount() + 1
-    
+
     raw = raw.merge(settled_all[['id_number', 'effective_settlement_date', 'amount', 'status', 'settlement_rank']],
-                    on=['id_number', 'effective_settlement_date', 'amount', 'status'],
-                    how='left')
+                    on=['id_number', 'effective_settlement_date', 'amount', 'status'], how='left')
     raw_stage_1_2 = raw_stage_1_2.merge(settled_all[['id_number', 'effective_settlement_date', 'amount', 'status', 'settlement_rank']],
-                                        on=['id_number', 'effective_settlement_date', 'amount', 'status'],
-                                        how='left')
-    
+                                        on=['id_number', 'effective_settlement_date', 'amount', 'status'], how='left')
+
     RESTRUCTURE_CAP = 8000
     LEGAL_CAP = 8000
     AFTERCARE_CAP = 450
     AFTERCARE_RATE = 0.05
     LEGAL_CAP_UNDER_3000 = 3000
-    
+
     def calculate_revenue(row):
         amount = row['amount']
         rank = row['settlement_rank']
@@ -798,15 +663,14 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                 return min(amount, LEGAL_CAP)
         else:
             return min(amount * AFTERCARE_RATE, AFTERCARE_CAP)
-    
+
     raw['revenue'] = raw.apply(calculate_revenue, axis=1)
     raw_stage_1_2['revenue'] = raw_stage_1_2.apply(calculate_revenue, axis=1)
-    
+
     days_since_friday = (today.weekday() - 4) % 7
     last_friday = today - timedelta(days=days_since_friday)
     first_of_month = today.replace(day=1)
-    
-    # ---- Compute metrics (status-based) ----
+
     if use_custom_range:
         settled_today_df = get_settled_df(raw_stage_1_2, end_dt, end_dt)
         settled_cycle_df = get_settled_df(raw_stage_1_2, start_dt, end_dt)
@@ -824,6 +688,15 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         disputed_df = get_unique_stage_clients(raw_stage_1_2, 'Disputed', 'collection_date', start_dt, end_dt)
         disputed_mtd_df = get_disputed_df(raw_stage_1_2, start_dt, end_dt)
         disputed_mtd_v = disputed_mtd_df['amount'].sum()
+
+        cancelled_mandate_mtd_df = get_cancelled_mandate_df(raw_stage_1_2, start_dt, end_dt)
+        cancelled_mandate_mtd_v = cancelled_mandate_mtd_df['amount'].sum()
+        cancelled_mandate_c = len(cancelled_mandate_mtd_df)
+
+        sale_not_submitted_mtd_df = get_sale_not_submitted_df(raw_stage_1_2, start_dt, end_dt)
+        sale_not_submitted_mtd_v = sale_not_submitted_mtd_df['amount'].sum()
+        sale_not_submitted_c = len(sale_not_submitted_mtd_df)
+
         current_month_settled = raw_stage_1_2[
             (raw_stage_1_2['status'].str.upper() == 'SETTLED') &
             (raw_stage_1_2['effective_settlement_date'] >= start_dt) &
@@ -842,24 +715,29 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         disputed_df = get_unique_stage_clients(raw_stage_1_2, 'Disputed')
         disputed_mtd_df = get_disputed_df(raw_stage_1_2, first_of_month, today)
         disputed_mtd_v = disputed_mtd_df['amount'].sum()
+
+        cancelled_mandate_mtd_df = get_cancelled_mandate_df(raw_stage_1_2, first_of_month, today)
+        cancelled_mandate_mtd_v = cancelled_mandate_mtd_df['amount'].sum()
+        cancelled_mandate_c = len(cancelled_mandate_mtd_df)
+
+        sale_not_submitted_mtd_df = get_sale_not_submitted_df(raw_stage_1_2, first_of_month, today)
+        sale_not_submitted_mtd_v = sale_not_submitted_mtd_df['amount'].sum()
+        sale_not_submitted_c = len(sale_not_submitted_mtd_df)
+
         current_month_settled = raw_stage_1_2[
             (raw_stage_1_2['status'].str.upper() == 'SETTLED') &
             (raw_stage_1_2['effective_settlement_date'] >= first_of_month) &
             (raw_stage_1_2['effective_settlement_date'] <= today)
         ]
-    
+
     if not tracking_temp.empty:
         tracking_df = tracking_temp.groupby('id_number').agg({
-            'client_name': 'first',
-            'cell': 'first',
-            'payment_stage': 'first',
-            'amount': 'sum',
-            'status': 'first',
-            'collection_date': 'max'
+            'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
+            'amount': 'sum', 'status': 'first', 'collection_date': 'max'
         }).reset_index()
     else:
         tracking_df = pd.DataFrame()
-    
+
     settled_today_c, settled_today_v = len(settled_today_df), settled_today_df['amount'].sum()
     settled_cycle_c, settled_cycle_v = len(settled_cycle_df), settled_cycle_df['amount'].sum()
     settled_mtd_c, settled_mtd_v = len(settled_mtd_df), settled_mtd_df['amount'].sum()
@@ -870,36 +748,35 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     failed_cycle_c, failed_cycle_v = len(failed_cycle_df), failed_cycle_df['amount'].sum()
     failed_mtd_c, failed_mtd_v = len(failed_mtd_df), failed_mtd_df['amount'].sum()
     disputed_c, disputed_v = len(disputed_df), disputed_df['amount'].sum() if not disputed_df.empty else 0
-    
+
     revenue_total = current_month_settled['revenue'].sum()
-    
+
     settled_clients = raw_stage_1_2[raw_stage_1_2['status'].str.upper() == 'SETTLED'].copy()
     rank_1_revenue = settled_clients[settled_clients['settlement_rank'] == 1]['revenue']
     rank_2_revenue = settled_clients[settled_clients['settlement_rank'] == 2]['revenue']
     rank_3plus_revenue = settled_clients[settled_clients['settlement_rank'] >= 3]['revenue']
-    
+
     avg_rank1 = rank_1_revenue.mean() if not rank_1_revenue.empty else 8000
     avg_rank2 = rank_2_revenue.mean() if not rank_2_revenue.empty else 8000
     avg_rank3 = rank_3plus_revenue.mean() if not rank_3plus_revenue.empty else 450
-    
+
     new_clients_est = max(1, len(settled_clients[settled_clients['settlement_rank'] == 1]['id_number'].unique()) // 12) if not settled_clients.empty else 1
     legal_clients_est = max(1, len(settled_clients[settled_clients['settlement_rank'] == 2]['id_number'].unique()) // 12) if not settled_clients.empty else 1
     after_clients_est = max(1, len(settled_clients[settled_clients['settlement_rank'] >= 3]['id_number'].unique()) // 12) if not settled_clients.empty else 1
-    
+
     forecast_restructuring = new_clients_est * avg_rank1
     forecast_legal = legal_clients_est * avg_rank2
     forecast_aftercare = after_clients_est * avg_rank3
     forecast_admin_app = new_clients_est * 350
     forecast_total = forecast_restructuring + forecast_aftercare + forecast_admin_app + forecast_legal
 
-    # ---- Success Rate (Disputed counts as a FAILURE) ----
-    # Success Rate = Settled / (Settled + Failed + Disputed)
+    # ---- Success Rate: Settled / (Settled + Failed + Disputed). Cancelled Mandate and Sale Not Submitted are NOT included. ----
     denominator = settled_mtd_v + failed_mtd_v + disputed_mtd_v
     if denominator > 0:
         success_rate = (settled_mtd_v / denominator) * 100
     else:
         success_rate = 0
-    
+
     # ---- DEBITS CALCULATION ----
     if use_custom_range:
         def extract_all_debits(df, sheet_name):
@@ -924,7 +801,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             df_temp['cell'] = df_temp[cell_col] if cell_col else ''
             df_temp['payment_stage'] = pd.to_numeric(df_temp[stage_col], errors='coerce')
             return df_temp[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'due_date']]
-        
+
         debits_current = extract_all_debits(fee_df_current, current_sheet)
         debits_next = extract_all_debits(fee_df_next, next_sheet) if fee_df_next is not None else pd.DataFrame()
         all_debits = pd.concat([debits_current, debits_next], ignore_index=True)
@@ -947,13 +824,12 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                 last_day_month = today.replace(year=today.year+1, month=1, day=1) - timedelta(days=1)
             else:
                 last_day_month = today.replace(month=today.month+1, day=1) - timedelta(days=1)
-            
             if today.month == 12:
                 first_of_next_month = today.replace(year=today.year+1, month=1, day=1)
             else:
                 first_of_next_month = today.replace(month=today.month+1, day=1)
             last_of_next_month = (first_of_next_month + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-            
+
             if single_month_mode:
                 first_of_current = today.replace(day=1)
                 current_future = all_future[(all_future['due_date'] >= first_of_current) & (all_future['due_date'] <= last_day_month)]
@@ -974,10 +850,10 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                     next_debits_c = 0
                     next_debits_v = 0
                 range_debits_df = pd.concat([current_future, next_future], ignore_index=True)
-    
+
     # ---- Priority Queue ----
-    priority_df = raw[(raw['status'].str.upper().isin(['FAILED', 'TRACKING', 'INTRACKING'])) | 
-                      ((raw['payment_stage'].isin([1,2,3])) & 
+    priority_df = raw[(raw['status'].str.upper().isin(['FAILED', 'TRACKING', 'INTRACKING'])) |
+                      ((raw['payment_stage'].isin([1, 2, 3])) &
                        (raw['status'].str.upper().isin(['FAILED', 'TRACKING', 'INTRACKING', 'LATE'])))]
     if not priority_df.empty:
         for col in ['cell', 'client_name', 'id_number']:
@@ -987,16 +863,16 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         priority_df['payment_stage'] = priority_df['payment_stage'].fillna(0)
         if 'due_date' not in priority_df.columns:
             priority_df['due_date'] = pd.NaT
-        
+
         priority_df = priority_df.sort_values('collection_date').groupby('id_number').apply(get_latest_record).reset_index(drop=True)
-        
+
         def get_weight(stage):
             if stage in [1, 2]: return 100
             if stage == 3: return 90
-            if stage in [4,5,6]: return 60
+            if stage in [4, 5, 6]: return 60
             if stage >= 7: return 30
             return 50
-        
+
         priority_df['stage_weight'] = priority_df['payment_stage'].apply(get_weight)
         if 'due_date' in priority_df.columns:
             priority_df['days_overdue'] = (today - priority_df['due_date']).dt.days.fillna(0)
@@ -1004,55 +880,39 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             priority_df['days_overdue'] = 0
         priority_df['priority_score'] = priority_df['stage_weight'] + priority_df['days_overdue'] * 2
         priority_df['Priority Level'] = priority_df['priority_score'].apply(lambda x: 'High' if x >= 150 else ('Medium' if x >= 100 else 'Low'))
-        
-        cols = ['id_number', 'client_name', 'cell', 'payment_stage', 'days_overdue', 
-                'amount', 'status', 'priority_score', 'Priority Level']
+
+        cols = ['id_number', 'client_name', 'cell', 'payment_stage', 'days_overdue', 'amount', 'status', 'priority_score', 'Priority Level']
         for col in cols:
             if col not in priority_df.columns:
                 priority_df[col] = ''
-        
+
         failed_priority = priority_df[priority_df['status'].str.upper() == 'FAILED'].copy()
         tracking_priority = priority_df[priority_df['status'].str.upper().isin(['TRACKING', 'INTRACKING'])].copy()
-        
         failed_priority = failed_priority.sort_values('priority_score', ascending=False)
         tracking_priority = tracking_priority.sort_values('priority_score', ascending=False)
-        
+
         if not failed_priority.empty:
             failed_priority = failed_priority[cols]
-            failed_priority.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 
-                                       'Amount', 'Status', 'Score', 'Priority Level']
+            failed_priority.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level']
         else:
-            failed_priority = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 
-                                                    'Amount', 'Status', 'Score', 'Priority Level'])
-        
+            failed_priority = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level'])
+
         if not tracking_priority.empty:
             tracking_priority = tracking_priority[cols]
-            tracking_priority.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 
-                                         'Amount', 'Status', 'Score', 'Priority Level']
+            tracking_priority.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level']
         else:
-            tracking_priority = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 
-                                                      'Amount', 'Status', 'Score', 'Priority Level'])
-        
+            tracking_priority = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level'])
+
         separator = pd.DataFrame([[''] * len(failed_priority.columns)], columns=failed_priority.columns)
-        header_failed = pd.DataFrame([['=== FAILED PAYMENTS ==='] + [''] * (len(failed_priority.columns)-1)], 
-                                      columns=failed_priority.columns)
-        header_tracking = pd.DataFrame([['=== TRACKING / INTRACKING CLIENTS ==='] + [''] * (len(failed_priority.columns)-1)], 
-                                        columns=failed_priority.columns)
-        
-        combined_priority = pd.concat([
-            header_failed,
-            failed_priority,
-            separator,
-            header_tracking,
-            tracking_priority
-        ], ignore_index=True)
+        header_failed = pd.DataFrame([['=== FAILED PAYMENTS ==='] + [''] * (len(failed_priority.columns) - 1)], columns=failed_priority.columns)
+        header_tracking = pd.DataFrame([['=== TRACKING / INTRACKING CLIENTS ==='] + [''] * (len(failed_priority.columns) - 1)], columns=failed_priority.columns)
+
+        combined_priority = pd.concat([header_failed, failed_priority, separator, header_tracking, tracking_priority], ignore_index=True)
     else:
         cols = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level']
         combined_priority = pd.DataFrame(columns=cols)
-    
-    # ---- SMS lists (already extracted from Payment Report) ----
-    # Use the already prepared failed_sms_pmt and tracking_sms_pmt.
-    
+
+    # ---- Failed Clients list ----
     def get_latest_record_for_sheet(df):
         if df.empty:
             return df
@@ -1063,7 +923,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             else:
                 df['id_number'] = df.index.astype(str)
         return df.sort_values('collection_date').groupby('id_number').apply(lambda g: g.iloc[-1]).reset_index(drop=True)
-    
+
     failed_clients = raw[raw['status'].str.upper() == 'FAILED'].copy()
     if not failed_clients.empty:
         failed_clients = get_latest_record_for_sheet(failed_clients)
@@ -1072,7 +932,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         failed_clients.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount']
     else:
         failed_clients = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount'])
-    
+
     def prep_detail_df(df, date_col_name, status_col='status'):
         if df.empty:
             return pd.DataFrame()
@@ -1089,7 +949,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         df_out = df_out[cols_to_keep]
         df_out.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Date', 'Status'] if status_col in df_out.columns else ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Date']
         return df_out
-    
+
     detail_dfs = {}
     if not settled_today_df.empty:
         detail_dfs['Settled Today'] = prep_detail_df(settled_today_df, 'effective_settlement_date')
@@ -1107,7 +967,21 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         detail_dfs['Failed Period'] = prep_detail_df(failed_cycle_df, 'collection_date')
     if not disputed_df.empty:
         detail_dfs['Disputed'] = prep_detail_df(disputed_df, 'collection_date')
-    # Debits detail
+
+    if not cancelled_mandate_mtd_df.empty:
+        cm_dedup = cancelled_mandate_mtd_df.groupby('id_number').agg({
+            'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
+            'amount': 'sum', 'status': 'first', 'collection_date': 'max'
+        }).reset_index()
+        detail_dfs['Client Cancelled Mandate'] = prep_detail_df(cm_dedup, 'collection_date')
+
+    if not sale_not_submitted_mtd_df.empty:
+        sns_dedup = sale_not_submitted_mtd_df.groupby('id_number').agg({
+            'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
+            'amount': 'sum', 'status': 'first', 'collection_date': 'max'
+        }).reset_index()
+        detail_dfs['Sale Not Submitted'] = prep_detail_df(sns_dedup, 'collection_date')
+
     if use_custom_range and not range_debits_df.empty:
         detail_dfs['Total Due Period'] = range_debits_df[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'due_date']].copy()
         detail_dfs['Total Due Period'].columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Date']
@@ -1115,7 +989,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         if not range_debits_df.empty:
             detail_dfs['Debits Detail'] = range_debits_df[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'due_date']].copy()
             detail_dfs['Debits Detail'].columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Date']
-    
+
     return {
         'ref_date': today,
         'current_sheet': current_sheet,
@@ -1145,6 +1019,10 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         'failed_mtd_v': failed_mtd_v,
         'disputed_c': disputed_c,
         'disputed_v': disputed_v,
+        'cancelled_mandate_c': cancelled_mandate_c,
+        'cancelled_mandate_v': cancelled_mandate_mtd_v,
+        'sale_not_submitted_c': sale_not_submitted_c,
+        'sale_not_submitted_v': sale_not_submitted_mtd_v,
         'revenue_total': revenue_total,
         'forecast_restructuring': forecast_restructuring,
         'forecast_legal': forecast_legal,
@@ -1153,8 +1031,9 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         'forecast_total': forecast_total,
         'success_rate': success_rate,
         'combined_priority': combined_priority,
-        'failed_sms': failed_sms_pmt,          # <-- FROM PAYMENT REPORT (includes Disputed)
-        'tracking_sms': tracking_sms_pmt,      # <-- FROM PAYMENT REPORT
+        'failed_sms': failed_sms_pmt,
+        'tracking_sms': tracking_sms_pmt,
+        'sale_not_submitted_sms': sale_not_submitted_sms_pmt,
         'failed_clients': failed_clients,
         'detail_dfs': detail_dfs,
         'raw': raw,
@@ -1166,12 +1045,10 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         'pmt_debug': pmt_debug if not forecast_mode else None
     }
 
+# ================================================================
 # ---- Helper function to send SMS ----
+# ================================================================
 def send_sms(to_number, message, provider_type="generic"):
-    """
-    Send an SMS using the configured provider.
-    Returns (success_bool, response_message).
-    """
     try:
         if provider_type == "generic":
             provider = GenericSMSProvider(
@@ -1179,31 +1056,21 @@ def send_sms(to_number, message, provider_type="generic"):
                 st.secrets["SMS_API_KEY"],
                 st.secrets["SMS_FROM_NUMBER"]
             )
-        elif provider_type == "africastalking":
-            # If you use Africa's Talking, uncomment and import the class
-            # from sms_provider import AfricaTalking
-            # provider = AfricaTalking(
-            #     st.secrets["SMS_USERNAME"],
-            #     st.secrets["SMS_API_KEY"],
-            #     st.secrets["SMS_FROM_NUMBER"]
-            # )
-            raise NotImplementedError("Africa's Talking provider not embedded; please add the class.")
-        elif provider_type == "twilio":
-            raise NotImplementedError("Twilio provider not embedded; please add the class.")
         else:
             raise ValueError("Unknown provider type")
-        
-        # Format phone number (add country code if missing)
+
         to_number = str(to_number).strip()
         if not to_number.startswith("+"):
             to_number = "+27" + to_number.lstrip("0")
-        
+
         result = provider.send(to_number, message)
         return True, result
     except Exception as e:
         return False, str(e)
 
+# ================================================================
 # ---- Detect sheets and handle selection ----
+# ================================================================
 with st.spinner("⏳ Reading file structure..."):
     xls = pd.ExcelFile(fee_content)
     all_sheets = xls.sheet_names
@@ -1226,31 +1093,27 @@ if auto_current is None:
 
 auto_next = find_sheet([next_month_full, next_month_name], all_sheets)
 if auto_next is None:
-    month_abbrs = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
+    month_abbrs = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
     for sheet in all_sheets:
-        if sheet != auto_current and not any(kw in sheet.upper() for kw in ['SUMMARY','TOTAL','DASHBOARD']):
+        if sheet != auto_current and not any(kw in sheet.upper() for kw in ['SUMMARY', 'TOTAL', 'DASHBOARD']):
             if any(abbr in sheet.upper() for abbr in month_abbrs):
                 auto_next = sheet
                 break
 
-current_sheet = st.sidebar.selectbox(
-    "Current Month Sheet",
-    all_sheets,
-    index=all_sheets.index(auto_current) if auto_current in all_sheets else 0
-)
+current_sheet = st.sidebar.selectbox("Current Month Sheet", all_sheets,
+    index=all_sheets.index(auto_current) if auto_current in all_sheets else 0)
 
 def get_next_month_sheet(current_sheet_name, all_sheets):
     try:
         parts = current_sheet_name.split()
         for i, part in enumerate(parts):
-            if part.upper() in ['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE','JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER']:
+            if part.upper() in ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER']:
                 month_str = part
                 year_str = parts[i+1] if i+1 < len(parts) else None
                 break
         else:
             return auto_next
-        
-        month_names = ['JANUARY','FEBRUARY','MARCH','APRIL','MAY','JUNE','JULY','AUGUST','SEPTEMBER','OCTOBER','NOVEMBER','DECEMBER']
+        month_names = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER']
         idx = month_names.index(month_str.upper())
         next_idx = (idx + 1) % 12
         next_month_str = month_names[next_idx]
@@ -1270,12 +1133,8 @@ next_sheet_default = get_next_month_sheet(current_sheet, all_sheets) if not sing
 if single_month_mode:
     next_sheet = None
 else:
-    next_sheet = st.sidebar.selectbox(
-        "Next Month Sheet",
-        all_sheets,
-        index=all_sheets.index(next_sheet_default) if next_sheet_default in all_sheets else 0,
-        disabled=False
-    )
+    next_sheet = st.sidebar.selectbox("Next Month Sheet", all_sheets,
+        index=all_sheets.index(next_sheet_default) if next_sheet_default in all_sheets else 0, disabled=False)
 
 if single_month_mode:
     try:
@@ -1305,100 +1164,39 @@ if result is None:
     st.stop()
 
 (
-    ref_date_used,
-    current_sheet_used,
-    next_sheet_used,
-    single_month_mode_flag,
-    current_debits_c,
-    current_debits_v,
-    next_debits_c,
-    next_debits_v,
-    settled_today_c,
-    settled_today_v,
-    settled_cycle_c,
-    settled_cycle_v,
-    settled_mtd_c,
-    settled_mtd_v,
-    settling_c,
-    settling_v,
-    submitted_c,
-    submitted_v,
-    sub_col_c,
-    sub_col_v,
-    tracking_c,
-    tracking_v,
-    failed_cycle_c,
-    failed_cycle_v,
-    failed_mtd_c,
-    failed_mtd_v,
-    disputed_c,
-    disputed_v,
-    revenue_total,
-    forecast_restructuring,
-    forecast_legal,
-    forecast_aftercare,
-    forecast_admin_app,
-    forecast_total,
-    success_rate,
-    combined_priority,
-    failed_sms,
-    tracking_sms,
-    failed_clients,
-    detail_dfs,
-    raw,
-    raw_stage_1_2,
-    all_future,
-    fee_status_df,
-    fee_base
+    ref_date_used, current_sheet_used, next_sheet_used, single_month_mode_flag,
+    current_debits_c, current_debits_v, next_debits_c, next_debits_v,
+    settled_today_c, settled_today_v, settled_cycle_c, settled_cycle_v,
+    settled_mtd_c, settled_mtd_v, settling_c, settling_v,
+    submitted_c, submitted_v, sub_col_c, sub_col_v,
+    tracking_c, tracking_v, failed_cycle_c, failed_cycle_v,
+    failed_mtd_c, failed_mtd_v, disputed_c, disputed_v,
+    cancelled_mandate_c, cancelled_mandate_v,
+    sale_not_submitted_c, sale_not_submitted_v,
+    revenue_total, forecast_restructuring, forecast_legal, forecast_aftercare,
+    forecast_admin_app, forecast_total, success_rate,
+    combined_priority, failed_sms, tracking_sms, sale_not_submitted_sms,
+    failed_clients, detail_dfs, raw, raw_stage_1_2, all_future, fee_status_df, fee_base
 ) = (
-    result['ref_date'],
-    result['current_sheet'],
-    result['next_sheet'],
-    result['single_month_mode'],
-    result['current_debits_c'],
-    result['current_debits_v'],
-    result['next_debits_c'],
-    result['next_debits_v'],
-    result['settled_today_c'],
-    result['settled_today_v'],
-    result['settled_cycle_c'],
-    result['settled_cycle_v'],
-    result['settled_mtd_c'],
-    result['settled_mtd_v'],
-    result['settling_c'],
-    result['settling_v'],
-    result['submitted_c'],
-    result['submitted_v'],
-    result['sub_col_c'],
-    result['sub_col_v'],
-    result['tracking_c'],
-    result['tracking_v'],
-    result['failed_cycle_c'],
-    result['failed_cycle_v'],
-    result['failed_mtd_c'],
-    result['failed_mtd_v'],
-    result['disputed_c'],
-    result['disputed_v'],
-    result['revenue_total'],
-    result['forecast_restructuring'],
-    result['forecast_legal'],
-    result['forecast_aftercare'],
-    result['forecast_admin_app'],
-    result['forecast_total'],
-    result['success_rate'],
-    result['combined_priority'],
-    result['failed_sms'],
-    result['tracking_sms'],
-    result['failed_clients'],
-    result['detail_dfs'],
-    result['raw'],
-    result['raw_stage_1_2'],
-    result['all_future'],
-    result['fee_status_df'],
-    result['fee_base']
+    result['ref_date'], result['current_sheet'], result['next_sheet'], result['single_month_mode'],
+    result['current_debits_c'], result['current_debits_v'], result['next_debits_c'], result['next_debits_v'],
+    result['settled_today_c'], result['settled_today_v'], result['settled_cycle_c'], result['settled_cycle_v'],
+    result['settled_mtd_c'], result['settled_mtd_v'], result['settling_c'], result['settling_v'],
+    result['submitted_c'], result['submitted_v'], result['sub_col_c'], result['sub_col_v'],
+    result['tracking_c'], result['tracking_v'], result['failed_cycle_c'], result['failed_cycle_v'],
+    result['failed_mtd_c'], result['failed_mtd_v'], result['disputed_c'], result['disputed_v'],
+    result['cancelled_mandate_c'], result['cancelled_mandate_v'],
+    result['sale_not_submitted_c'], result['sale_not_submitted_v'],
+    result['revenue_total'], result['forecast_restructuring'], result['forecast_legal'], result['forecast_aftercare'],
+    result['forecast_admin_app'], result['forecast_total'], result['success_rate'],
+    result['combined_priority'], result['failed_sms'], result['tracking_sms'], result['sale_not_submitted_sms'],
+    result['failed_clients'], result['detail_dfs'], result['raw'], result['raw_stage_1_2'],
+    result['all_future'], result['fee_status_df'], result['fee_base']
 )
 
+# ================================================================
 # ---- Dashboard output ----
+# ================================================================
 if date_mode == "Custom Range":
     date_label = f"{start_date.strftime('%d %b %Y')} – {end_date.strftime('%d %b %Y')}"
 else:
@@ -1411,9 +1209,8 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ---- KPIs ----
+# ---- Row 1: Main KPIs ----
 col1, col2, col3, col4 = st.columns(4)
-
 with col1:
     st.markdown(f"""
     <div class="metric-card">
@@ -1422,7 +1219,6 @@ with col1:
         <div class="metric-delta">{settled_cycle_c} clients</div>
     </div>
     """, unsafe_allow_html=True)
-
 with col2:
     if date_mode == "Custom Range":
         label = "📅 Total Due in Period"
@@ -1444,7 +1240,6 @@ with col2:
         <div class="metric-delta">{delta}</div>
     </div>
     """, unsafe_allow_html=True)
-
 with col3:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #28a745;">
@@ -1453,19 +1248,17 @@ with col3:
         <div class="metric-delta">&nbsp;</div>
     </div>
     """, unsafe_allow_html=True)
-
 with col4:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #6f42c1;">
         <div class="metric-label">🎯 Success Rate {date_mode}</div>
         <div class="metric-value">{success_rate:.1f}%</div>
-        <div class="metric-delta">By Value (Disputed = Failure)</div>
+        <div class="metric-delta">Settled / (Settled + Failed + Disputed)</div>
     </div>
     """, unsafe_allow_html=True)
 
-# ---- Row 2: Additional metrics ----
+# ---- Row 2: Additional KPIs ----
 col1, col2, col3, col4 = st.columns(4)
-
 with col1:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #17a2b8;">
@@ -1474,7 +1267,6 @@ with col1:
         <div class="metric-delta">{settled_today_c} clients</div>
     </div>
     """, unsafe_allow_html=True)
-
 with col2:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #17a2b8;">
@@ -1483,7 +1275,6 @@ with col2:
         <div class="metric-delta">{settled_mtd_c} clients</div>
     </div>
     """, unsafe_allow_html=True)
-
 with col3:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #dc3545;">
@@ -1492,7 +1283,6 @@ with col3:
         <div class="metric-delta">{failed_cycle_c} clients</div>
     </div>
     """, unsafe_allow_html=True)
-
 with col4:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #dc3545;">
@@ -1510,7 +1300,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 col1, col2, col3, col4 = st.columns(4)
-
 with col1:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #fd7e14;">
@@ -1519,7 +1308,6 @@ with col1:
         <div class="metric-delta">{settling_c} clients</div>
     </div>
     """, unsafe_allow_html=True)
-
 with col2:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #fd7e14;">
@@ -1528,7 +1316,6 @@ with col2:
         <div class="metric-delta">{submitted_c} clients</div>
     </div>
     """, unsafe_allow_html=True)
-
 with col3:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #fd7e14;">
@@ -1537,7 +1324,6 @@ with col3:
         <div class="metric-delta">{sub_col_c} clients</div>
     </div>
     """, unsafe_allow_html=True)
-
 with col4:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #20c997;">
@@ -1547,7 +1333,40 @@ with col4:
     </div>
     """, unsafe_allow_html=True)
 
-# ---- Row 4: Debits (or Total Due) ----
+# ---- Row 4: Independent Statuses (Cancelled Mandate, Sale Not Submitted, Disputed) ----
+st.markdown("""
+<div style="margin-top: 24px; margin-bottom: 16px;">
+    <h3 style="font-weight: 600; color: #1e1e2d;">📌 Independent Statuses (not counted as failures)</h3>
+</div>
+""", unsafe_allow_html=True)
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.markdown(f"""
+    <div class="metric-card" style="border-left-color: #e83e8c;">
+        <div class="metric-label">⚠️ Client Cancelled Mandate</div>
+        <div class="metric-value">R {cancelled_mandate_v:,.2f}</div>
+        <div class="metric-delta">{cancelled_mandate_c} clients</div>
+    </div>
+    """, unsafe_allow_html=True)
+with col2:
+    st.markdown(f"""
+    <div class="metric-card" style="border-left-color: #6c757d;">
+        <div class="metric-label">📭 Sale Not Submitted</div>
+        <div class="metric-value">R {sale_not_submitted_v:,.2f}</div>
+        <div class="metric-delta">{sale_not_submitted_c} clients</div>
+    </div>
+    """, unsafe_allow_html=True)
+with col3:
+    st.markdown(f"""
+    <div class="metric-card" style="border-left-color: #dc3545;">
+        <div class="metric-label">🔴 Disputed</div>
+        <div class="metric-value">R {disputed_v:,.2f}</div>
+        <div class="metric-delta">{disputed_c} clients</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# ---- Row 5: Debits ----
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">📅 Upcoming Debits (Stage 1/2)</h3>
@@ -1555,7 +1374,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 col1, col2 = st.columns(2)
-
 if date_mode == "Custom Range":
     with col1:
         st.markdown(f"""
@@ -1600,26 +1418,10 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-# ---- Row 5: Disputed ----
-st.markdown("""
-<div style="margin-top: 24px; margin-bottom: 16px;">
-    <h3 style="font-weight: 600; color: #1e1e2d;">⚠️ Disputed</h3>
-</div>
-""", unsafe_allow_html=True)
-
-st.markdown(f"""
-<div class="metric-card" style="border-left-color: #e83e8c; max-width: 25%;">
-    <div class="metric-label">Disputed Clients</div>
-    <div class="metric-value">R {disputed_v:,.2f}</div>
-    <div class="metric-delta">{disputed_c} clients</div>
-</div>
-""", unsafe_allow_html=True)
-
 # ---- Charts ----
 st.subheader("📊 Visual Analytics")
 
 col1, col2 = st.columns(2)
-
 with col1:
     with st.container():
         st.markdown('<div class="chart-container">', unsafe_allow_html=True)
@@ -1630,7 +1432,6 @@ with col1:
             hole=0.4
         ), use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
-
 with col2:
     with st.container():
         st.markdown('<div class="chart-container">', unsafe_allow_html=True)
@@ -1642,31 +1443,20 @@ with col2:
         st.markdown('</div>', unsafe_allow_html=True)
 
 col1, col2 = st.columns(2)
-
 with col1:
     with st.container():
         st.markdown('<div class="chart-container">', unsafe_allow_html=True)
         if date_mode == "Custom Range":
-            debits_df = pd.DataFrame({
-                'Period': ['Total Due'],
-                'Amount': [current_debits_v]
-            })
+            debits_df = pd.DataFrame({'Period': ['Total Due'], 'Amount': [current_debits_v]})
             st.plotly_chart(px.bar(debits_df, x='Period', y='Amount', title='Total Due in Period', color='Period'), use_container_width=True)
         else:
             if not single_month_mode:
-                debits_df = pd.DataFrame({
-                    'Month': ['Current', 'Next'],
-                    'Amount': [current_debits_v, next_debits_v]
-                })
+                debits_df = pd.DataFrame({'Month': ['Current', 'Next'], 'Amount': [current_debits_v, next_debits_v]})
                 st.plotly_chart(px.bar(debits_df, x='Month', y='Amount', title='Debits Comparison', color='Month'), use_container_width=True)
             else:
-                debits_df = pd.DataFrame({
-                    'Month': ['Selected Month'],
-                    'Amount': [current_debits_v]
-                })
+                debits_df = pd.DataFrame({'Month': ['Selected Month'], 'Amount': [current_debits_v]})
                 st.plotly_chart(px.bar(debits_df, x='Month', y='Amount', title='Debits (Single Month)', color='Month'), use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
-
 with col2:
     with st.container():
         st.markdown('<div class="chart-container">', unsafe_allow_html=True)
@@ -1740,12 +1530,11 @@ if os.path.exists(history_file):
                                         labels={'value': 'Amount (R)', 'variable': 'Category'})
                     st.plotly_chart(fig_trend, use_container_width=True)
                     st.markdown('</div>', unsafe_allow_html=True)
-
             with col2:
                 with st.container():
                     st.markdown('<div class="chart-container">', unsafe_allow_html=True)
                     fig_sr = px.line(history_df, x='report_date', y='success_rate',
-                                     title='Success Rate (%) Over Time (Disputed = Failure)')
+                                     title='Success Rate (%) Over Time')
                     st.plotly_chart(fig_sr, use_container_width=True)
                     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1761,7 +1550,7 @@ if os.path.exists(history_file):
         pass
 
 # ================================================================
-# 📱 SMS SENDING SECTION — with your templates
+# 📱 SMS SENDING SECTION
 # ================================================================
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
@@ -1769,70 +1558,54 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ---- Helper function to send SMS to selected clients ----
 def send_bulk_sms(selected_df, message, list_name):
     if selected_df.empty:
         st.warning("No clients selected.")
         return
-    
-    # Confirm before sending
     if not st.button(f"📱 Confirm Send {len(selected_df)} SMS to {list_name}"):
         return
-    
     progress = st.progress(0)
     success_count = 0
     failed_list = []
-    
     for i, (idx, row) in enumerate(selected_df.iterrows()):
         cell = row.get("Cell") or row.get("cell")
         if pd.isna(cell) or not str(cell).strip():
             failed_list.append(f"Row {i+1}: No phone number")
             continue
         phone = str(cell).strip()
-        # Format phone number
         if not phone.startswith("+"):
             phone = "+27" + phone.lstrip("0")
-        
-        # Personalise message (optional)
         name = row.get("Name") or row.get("client_name") or "Client"
         personalised_msg = message.replace("{name}", name)
-        
         success, result = send_sms(phone, personalised_msg)
         if success:
             success_count += 1
         else:
             failed_list.append(f"{name} ({phone}): {result}")
         progress.progress((i + 1) / len(selected_df))
-    
     if success_count == len(selected_df):
         st.success(f"✅ All {success_count} SMS messages sent successfully to {list_name}.")
     else:
         st.warning(f"⚠️ Sent {success_count} out of {len(selected_df)}. Failed: {', '.join(failed_list)}")
 
-# ---- Failed Clients SMS ----
+# ---- Failed Clients SMS (includes Failed, Disputed, Client Cancelled Mandate) ----
 st.subheader("📋 Failed Clients (SMS)")
 if not failed_sms.empty:
     select_all_failed = st.checkbox("Select all Failed clients", key="select_all_failed")
-    
     display_failed = failed_sms.copy()
     display_failed["Send"] = select_all_failed
-    
     edited_failed = st.data_editor(
         display_failed,
-        column_config={
-            "Send": st.column_config.CheckboxColumn("Send", default=select_all_failed)
-        },
+        column_config={"Send": st.column_config.CheckboxColumn("Send", default=select_all_failed)},
         disabled=["ID NUMBER", "Name", "Cell", "Stage", "Amount", "Status"],
         hide_index=True,
         key="failed_editor"
     )
-    
     failed_message = st.text_area(
         "Message for Failed Clients",
         value="Dear {name},\nURGENT: Your debit order has failed. Please make payment immediately to avoid arrears and possible termination of your debt review agreements. For assistance, contact us at: info@nationaldebt.org.za / 0873541057 / WhatsApp: https://wa.me/27873541057",
         key="failed_msg"
     )
-    
     col1, col2 = st.columns([1, 4])
     with col1:
         if st.button("📱 Send SMS to Selected Failed Clients", key="send_failed"):
@@ -1845,26 +1618,20 @@ else:
 st.subheader("📋 Intracking Clients (SMS)")
 if not tracking_sms.empty:
     select_all_tracking = st.checkbox("Select all Intracking clients", key="select_all_tracking")
-    
     display_tracking = tracking_sms.copy()
     display_tracking["Send"] = select_all_tracking
-    
     edited_tracking = st.data_editor(
         display_tracking,
-        column_config={
-            "Send": st.column_config.CheckboxColumn("Send", default=select_all_tracking)
-        },
+        column_config={"Send": st.column_config.CheckboxColumn("Send", default=select_all_tracking)},
         disabled=["ID NUMBER", "Name", "Cell", "Stage", "Amount", "Status"],
         hide_index=True,
         key="tracking_editor"
     )
-    
     tracking_message = st.text_area(
         "Message for Intracking Clients",
         value="NATIONAL DEBT INTERVENTION: Dear {name}, we have not yet received your monthly instalment, please ensure you have enough funds available in your bank account for the debit to go off successfully. 0873541057 / info@nationaldebt.org.za/ WhatsApp https://wa.me/27873541057",
         key="tracking_msg"
     )
-    
     col1, col2 = st.columns([1, 4])
     with col1:
         if st.button("📱 Send SMS to Selected Intracking Clients", key="send_tracking"):
@@ -1873,7 +1640,29 @@ if not tracking_sms.empty:
 else:
     st.info("No intracking clients.")
 
-# ---- CSV download buttons (still useful) ----
+# ================================================================
+# 📭 SALE NOT SUBMITTED LIST (NO SMS — for sales department)
+# ================================================================
+st.markdown("""
+<div style="margin-top: 32px; margin-bottom: 16px;">
+    <h3 style="font-weight: 600; color: #1e1e2d;">📭 Sale Not Submitted — Send to Sales Department</h3>
+    <p style="color: #6c757d; font-size: 14px;">This list is for your sales team to action. No SMS is sent to these clients.</p>
+</div>
+""", unsafe_allow_html=True)
+
+if not sale_not_submitted_sms.empty:
+    st.dataframe(sale_not_submitted_sms, width='stretch')
+    csv_sns = sale_not_submitted_sms.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        "📥 Download Sale Not Submitted CSV",
+        data=csv_sns,
+        file_name="sale_not_submitted.csv",
+        mime="text/csv"
+    )
+else:
+    st.info("No clients with 'Sale Not Submitted' status.")
+
+# ---- CSV download buttons ----
 st.markdown("---")
 st.subheader("📥 Export SMS Lists (CSV)")
 col1, col2 = st.columns(2)
@@ -1900,13 +1689,12 @@ if not combined_priority.empty:
             return 'background-color: #FFA500; color: black; font-weight: 600;'
         else:
             return 'background-color: #FFFF00; color: black; font-weight: 600;'
-    
     styled_priority = combined_priority.style.map(color_priority, subset=['Priority Level'])
     st.dataframe(styled_priority, width='stretch')
 else:
     st.info("No clients in the priority queue.")
 
-# ---- Data Preview with Diagnostics ----
+# ---- Data Preview ----
 with st.expander("🔍 Data Preview (Debugging)"):
     st.subheader("Summary")
     st.write(f"**Total rows after merge:** {len(raw)}")
@@ -1928,9 +1716,11 @@ with st.expander("🔍 Data Preview (Debugging)"):
             st.dataframe(pd.DataFrame(pmt_debug['pmt_sms_sample']), width='stretch')
         else:
             st.warning("Cleaned Payment Report is empty – check column detection.")
-        st.write(f"**Rows matching 'Failed/Disputed' keywords:** {pmt_debug['failed_count']}")
+        st.write(f"**Rows matching 'Failed/Disputed/Cancelled Mandate' keywords:** {pmt_debug['failed_count']}")
         st.write(f"**Rows matching 'Tracking/Intracking' keywords:** {pmt_debug['tracking_count']}")
         st.write(f"**Rows matching 'Disputed' only:** {pmt_debug['disputed_count']}")
+        st.write(f"**Rows matching 'Client Cancelled Mandate' only:** {pmt_debug['cancelled_mandate_count']}")
+        st.write(f"**Rows matching 'Sale Not Submitted' only:** {pmt_debug['sale_not_submitted_count']}")
 
     st.subheader("Sample of Raw Data")
     st.dataframe(raw.head(10), width='stretch')
@@ -1952,7 +1742,8 @@ def generate_excel():
             'Metric': ['Settled Period (Stage 1/2)', 'Settled Today', 'Settled Period Total',
                        'Settling (Stage 1/2)', 'Submitted (Stage 1/2)', 'Sub Collect (Stage 1/2)', 'Intracking (Stage 1/2)',
                        'Curr Month Debits (Stage 1/2)', 'Next Month Debits (Stage 1/2)',
-                       'Failed Period (Stage 1/2)', 'Failed MTD (Stage 1/2)', 'Disputed (Stage 1/2)',
+                       'Failed Period (Stage 1/2)', 'Failed MTD (Stage 1/2)',
+                       'Disputed (Stage 1/2)', 'Client Cancelled Mandate (Stage 1/2)', 'Sale Not Submitted (Stage 1/2)',
                        'Revenue Total (Stage 1/2, Period)',
                        'Success Rate (Period, by value, Disputed = Failure)',
                        'Single Month Mode'],
@@ -1968,6 +1759,8 @@ def generate_excel():
                       f"{failed_cycle_c} | R{failed_cycle_v:,.2f}",
                       f"{failed_mtd_c} | R{failed_mtd_v:,.2f}",
                       f"{disputed_c} | R{disputed_v:,.2f}",
+                      f"{cancelled_mandate_c} | R{cancelled_mandate_v:,.2f}",
+                      f"{sale_not_submitted_c} | R{sale_not_submitted_v:,.2f}",
                       f"R{revenue_total:,.2f}",
                       f"{success_rate:.1f}%",
                       "Yes" if single_month_mode else "No"]
@@ -1983,21 +1776,9 @@ def generate_excel():
         format_medium = workbook.add_format({'bg_color': '#FFA500', 'font_color': '#000000'})
         format_low = workbook.add_format({'bg_color': '#FFFF00', 'font_color': '#000000'})
         last_row_pq = len(combined_priority) + 1
-        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {
-            'type': 'formula',
-            'criteria': f'=$I1="High"',
-            'format': format_high
-        })
-        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {
-            'type': 'formula',
-            'criteria': f'=$I1="Medium"',
-            'format': format_medium
-        })
-        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {
-            'type': 'formula',
-            'criteria': f'=$I1="Low"',
-            'format': format_low
-        })
+        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {'type': 'formula', 'criteria': f'=$I1="High"', 'format': format_high})
+        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {'type': 'formula', 'criteria': f'=$I1="Medium"', 'format': format_medium})
+        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {'type': 'formula', 'criteria': f'=$I1="Low"', 'format': format_low})
 
         failed_clients.to_excel(writer, sheet_name='Failed Clients', index=False)
         writer.sheets['Failed Clients'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
@@ -2006,6 +1787,8 @@ def generate_excel():
         writer.sheets['Failed Clients (SMS)'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
         tracking_sms.to_excel(writer, sheet_name='Intracking Clients (SMS)', index=False)
         writer.sheets['Intracking Clients (SMS)'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
+        sale_not_submitted_sms.to_excel(writer, sheet_name='Sale Not Submitted', index=False)
+        writer.sheets['Sale Not Submitted'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
 
         for sheet_name, df in detail_dfs.items():
             if not df.empty:
