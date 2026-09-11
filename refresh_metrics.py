@@ -156,11 +156,15 @@ def build_report(fee_content, payment_content):
     if name_col: fee_base.rename(columns={name_col: "client_name"}, inplace=True)
     if cell_col: fee_base.rename(columns={cell_col: "cell"}, inplace=True)
 
+    # ---- FIX: Ensure all downstream-required columns exist ----
+    for col in ["client_name", "cell", "collection_date"]:
+        if col not in fee_base.columns:
+            fee_base[col] = ""
+
     fee_base["payment_stage"] = pd.to_numeric(fee_base["payment_stage"], errors="coerce")
     fee_base["amount"] = pd.to_numeric(fee_base["amount"], errors="coerce")
     fee_base["id_number"] = fee_base["id_number"].astype(str).str.strip()
-    if "collection_date" in fee_base.columns:
-        fee_base["collection_date"] = pd.to_datetime(fee_base["collection_date"], errors="coerce")
+    fee_base["collection_date"] = pd.to_datetime(fee_base["collection_date"], errors="coerce")
     fee_base = fee_base.dropna(subset=["id_number", "payment_stage"])
 
     # Remove generic cancellations but KEEP "Client Cancelled Mandate"
@@ -221,15 +225,21 @@ def build_report(fee_content, payment_content):
     sale_not_submitted_mask = fee_base["status"].astype(str).str.upper().str.contains("SALE NOT SUBMITTED", na=False)
     sns_df = fee_base[sale_not_submitted_mask].copy()
     if not sns_df.empty:
-        sns_df = sns_df.groupby("id_number").agg({
-            "client_name": "first", "cell": "first", "payment_stage": "first",
-            "amount": "sum", "status": "first"
-        }).reset_index()
-        sns_df = sns_df.rename(columns={"payment_stage": "payment_stage"})
+        agg_cols = {}
+        for c in ["client_name", "cell", "payment_stage", "amount", "status"]:
+            if c in sns_df.columns:
+                agg_cols[c] = "sum" if c == "amount" else "first"
+        sns_df = sns_df.groupby("id_number").agg(agg_cols).reset_index()
 
     # Client Cancelled Mandate — from Fee Audit
     cm_mask = fee_base["status"].astype(str).str.upper().str.contains("CLIENT CANCELLED MANDATE", na=False)
     cm_df = fee_base[cm_mask].copy()
+    if not cm_df.empty:
+        agg_cols = {}
+        for c in ["client_name", "cell", "payment_stage", "amount", "status"]:
+            if c in cm_df.columns:
+                agg_cols[c] = "sum" if c == "amount" else "first"
+        cm_df = cm_df.groupby("id_number").agg(agg_cols).reset_index()
 
     # ---- Metrics (same as dashboard) ----
     merged = fee_base.merge(
@@ -303,7 +313,6 @@ def build_report(fee_content, payment_content):
         "settled_today_c": int(len(settled_mtd[settled_mtd["collection_date"] == today])),
         "tracking_c": int(tracking_pmt["id_number"].nunique()) if not tracking_pmt.empty else 0,
         "failed_cycle_c": int(failed_mtd["id_number"].nunique()),
-        # Additional metrics for the Excel Dashboard sheet
         "disputed_v": float(disputed_mtd_v),
         "disputed_c": int(disputed_mtd["id_number"].nunique()),
         "cancelled_mandate_v": float(cm_df["amount"].sum()) if not cm_df.empty else 0.0,
@@ -318,7 +327,6 @@ def build_report(fee_content, payment_content):
 def build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        # ---- Dashboard sheet ----
         dashboard = pd.DataFrame({
             "Metric": [
                 "Settled Period Total",
@@ -349,34 +357,22 @@ def build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df):
         })
         dashboard.to_excel(writer, sheet_name="Dashboard", index=False)
 
-        # ---- SMS lists ----
+        def prep(df):
+            if df.empty:
+                return df
+            return df.rename(columns={
+                "id_number": "ID NUMBER", "client_name": "Name", "cell": "Cell",
+                "payment_stage": "Stage", "amount": "Amount", "status": "Status"
+            })
+
         if not failed_sms_df.empty:
-            failed_sms_out = failed_sms_df.rename(columns={
-                "id_number": "ID NUMBER", "client_name": "Name", "cell": "Cell",
-                "payment_stage": "Stage", "amount": "Amount", "status": "Status"
-            })
-            failed_sms_out.to_excel(writer, sheet_name="Failed SMS", index=False)
-
+            prep(failed_sms_df).to_excel(writer, sheet_name="Failed SMS", index=False)
         if not tracking_sms_df.empty:
-            tracking_out = tracking_sms_df.rename(columns={
-                "id_number": "ID NUMBER", "client_name": "Name", "cell": "Cell",
-                "payment_stage": "Stage", "amount": "Amount", "status": "Status"
-            })
-            tracking_out.to_excel(writer, sheet_name="Intracking SMS", index=False)
-
+            prep(tracking_sms_df).to_excel(writer, sheet_name="Intracking SMS", index=False)
         if not sns_df.empty:
-            sns_out = sns_df.rename(columns={
-                "id_number": "ID NUMBER", "client_name": "Name", "cell": "Cell",
-                "payment_stage": "Stage", "amount": "Amount", "status": "Status"
-            })
-            sns_out.to_excel(writer, sheet_name="Sale Not Submitted", index=False)
-
+            prep(sns_df).to_excel(writer, sheet_name="Sale Not Submitted", index=False)
         if not cm_df.empty:
-            cm_out = cm_df.rename(columns={
-                "id_number": "ID NUMBER", "client_name": "Name", "cell": "Cell",
-                "payment_stage": "Stage", "amount": "Amount", "status": "Status"
-            })
-            cm_out.to_excel(writer, sheet_name="Client Cancelled Mandate", index=False)
+            prep(cm_df).to_excel(writer, sheet_name="Client Cancelled Mandate", index=False)
 
     output.seek(0)
     return output
@@ -405,10 +401,7 @@ def main():
         mask = history_df["month"] == metrics["month"]
         if mask.any():
             for k, v in metrics.items():
-                if k in history_df.columns:
-                    history_df.loc[mask, k] = v
-                else:
-                    history_df.loc[mask, k] = v
+                history_df.loc[mask, k] = v
         else:
             history_df = pd.concat([history_df, pd.DataFrame([metrics])], ignore_index=True)
     else:
