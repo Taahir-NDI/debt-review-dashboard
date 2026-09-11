@@ -335,7 +335,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             temp = temp[temp['collection_date'] <= end_date]
         return temp
 
-    # ---- FIX: use .astype(str) for safe substring matching ----
     def get_cancelled_mandate_df(df, start_date=None, end_date=None):
         temp = df[df['status'].astype(str).str.upper().str.contains('CLIENT CANCELLED MANDATE', na=False)]
         if start_date and end_date:
@@ -392,6 +391,11 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         use_custom_range = False
         start_dt = None
         end_dt = None
+
+    # ---- NEW: compute the "Settled Period" date range once, up front ----
+    days_since_friday = (today.weekday() - 4) % 7
+    last_friday = today - timedelta(days=days_since_friday)
+    first_of_month = today.replace(day=1)
 
     fee_df_current = pd.read_excel(fee_content, sheet_name=current_sheet)
     fee_df_next = None
@@ -481,9 +485,23 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             'cancelled_mandate_count': 0, 'sale_not_submitted_count': 0
         }
 
+        # --- Extract Failed (including Disputed and Client Cancelled Mandate) ---
         failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED', 'DISPUTED', 'CLIENT CANCELLED MANDATE']
         failed_mask = pmt_sms['status'].str.upper().str.contains('|'.join(failed_keywords), na=False)
         failed_pmt = pmt_sms[failed_mask].copy()
+
+        # ---- NEW: only keep failures within the "Settled Period Total" timeframe ----
+        if use_custom_range:
+            failed_pmt = failed_pmt[
+                (failed_pmt['collection_date'] >= start_dt) &
+                (failed_pmt['collection_date'] <= end_dt)
+            ]
+        else:
+            failed_pmt = failed_pmt[
+                (failed_pmt['collection_date'] >= last_friday) &
+                (failed_pmt['collection_date'] <= today)
+            ]
+
         pmt_debug['failed_count'] = len(failed_pmt)
 
         tracking_keywords = ['TRACKING', 'INTRACKING', 'PENDING', 'OUTSTANDING']
@@ -594,7 +612,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                      'collection_date_pmt', 'settlement_date_pmt', 'dispute_date_pmt', 'cancelled_date_pmt']
         merged.drop(columns=[c for c in drop_cols if c in merged.columns], inplace=True, errors='ignore')
 
-        # ---- FIX: keep "Client Cancelled Mandate" rows, remove generic cancellations ----
+        # Keep "Client Cancelled Mandate" rows, remove generic cancellations
         status_upper_series = merged['status'].astype(str).str.upper()
         cancelled_mask = status_upper_series.str.contains('CANCELLED', na=False)
         keep_mask = status_upper_series.str.contains('CLIENT CANCELLED MANDATE', na=False)
@@ -666,9 +684,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     raw['revenue'] = raw.apply(calculate_revenue, axis=1)
     raw_stage_1_2['revenue'] = raw_stage_1_2.apply(calculate_revenue, axis=1)
 
-    days_since_friday = (today.weekday() - 4) % 7
-    last_friday = today - timedelta(days=days_since_friday)
-    first_of_month = today.replace(day=1)
+    # (last_friday / first_of_month were computed at the top)
 
     if use_custom_range:
         settled_today_df = get_settled_df(raw_stage_1_2, end_dt, end_dt)
@@ -769,14 +785,14 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     forecast_admin_app = new_clients_est * 350
     forecast_total = forecast_restructuring + forecast_aftercare + forecast_admin_app + forecast_legal
 
-    # ---- Success Rate: Settled / (Settled + Failed + Disputed). Cancelled Mandate and Sale Not Submitted are NOT included. ----
+    # ---- Success Rate ----
     denominator = settled_mtd_v + failed_mtd_v + disputed_mtd_v
     if denominator > 0:
         success_rate = (settled_mtd_v / denominator) * 100
     else:
         success_rate = 0
 
-    # ---- DEBITS CALCULATION ----
+    # ---- DEBITS ----
     if use_custom_range:
         def extract_all_debits(df, sheet_name):
             if df is None or df.empty:
@@ -1589,6 +1605,7 @@ def send_bulk_sms(selected_df, message, list_name):
 
 # ---- Failed Clients SMS ----
 st.subheader("📋 Failed Clients (SMS)")
+st.caption("Only clients whose failed payment falls within the current 'Settled Period' timeframe are shown here.")
 if not failed_sms.empty:
     select_all_failed = st.checkbox("Select all Failed clients", key="select_all_failed")
     display_failed = failed_sms.copy()
@@ -1611,7 +1628,7 @@ if not failed_sms.empty:
             selected = edited_failed[edited_failed["Send"] == True]
             send_bulk_sms(selected, failed_message, "Failed Clients")
 else:
-    st.info("No failed clients.")
+    st.info("No failed clients in the current period.")
 
 # ---- Intracking Clients SMS ----
 st.subheader("📋 Intracking Clients (SMS)")
@@ -1715,7 +1732,7 @@ with st.expander("🔍 Data Preview (Debugging)"):
             st.dataframe(pd.DataFrame(pmt_debug['pmt_sms_sample']), width='stretch')
         else:
             st.warning("Cleaned Payment Report is empty – check column detection.")
-        st.write(f"**Rows matching 'Failed/Disputed/Cancelled Mandate' keywords:** {pmt_debug['failed_count']}")
+        st.write(f"**Rows matching 'Failed/Disputed/Cancelled Mandate' keywords (within period):** {pmt_debug['failed_count']}")
         st.write(f"**Rows matching 'Tracking/Intracking' keywords:** {pmt_debug['tracking_count']}")
         st.write(f"**Rows matching 'Disputed' only:** {pmt_debug['disputed_count']}")
         st.write(f"**Rows matching 'Client Cancelled Mandate' only:** {pmt_debug['cancelled_mandate_count']}")
