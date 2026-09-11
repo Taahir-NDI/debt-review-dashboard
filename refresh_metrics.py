@@ -125,7 +125,6 @@ def build_report(fee_content, payment_content):
     days_since_friday = (today.weekday() - 4) % 7
     last_friday = today - timedelta(days=days_since_friday)
 
-    # Detect the current Fee Audit sheet
     xls = pd.ExcelFile(fee_content)
     all_sheets = xls.sheet_names
     month_full = today.strftime("%B %Y").upper()
@@ -156,7 +155,6 @@ def build_report(fee_content, payment_content):
     if name_col: fee_base.rename(columns={name_col: "client_name"}, inplace=True)
     if cell_col: fee_base.rename(columns={cell_col: "cell"}, inplace=True)
 
-    # ---- Ensure all downstream-required columns exist ----
     for col in ["client_name", "cell", "collection_date"]:
         if col not in fee_base.columns:
             fee_base[col] = ""
@@ -167,7 +165,6 @@ def build_report(fee_content, payment_content):
     fee_base["collection_date"] = pd.to_datetime(fee_base["collection_date"], errors="coerce")
     fee_base = fee_base.dropna(subset=["id_number", "payment_stage"])
 
-    # Remove generic cancellations but KEEP "Client Cancelled Mandate"
     status_up = fee_base["status"].astype(str).str.upper()
     cancel = status_up.str.contains("CANCELLED", na=False)
     keep = status_up.str.contains("CLIENT CANCELLED MANDATE", na=False)
@@ -190,7 +187,6 @@ def build_report(fee_content, payment_content):
     pmt["amount"] = pd.to_numeric(pmt["amount"], errors="coerce")
     pmt["collection_date"] = pd.to_datetime(pmt["collection_date"], errors="coerce")
 
-    # SMS lists (from Payment Report)
     sms_cols = ["id_number", "client_name", "cell", "payment_stage", "amount", "status"]
     pmt_sms = pay_df.rename(columns={
         p_id_col: "id_number", p_name_col: "client_name", p_cell_col: "cell",
@@ -231,7 +227,6 @@ def build_report(fee_content, payment_content):
                 agg_cols[c] = "sum" if c == "amount" else "first"
         sns_df = sns_df.groupby("id_number").agg(agg_cols).reset_index()
 
-    # Client Cancelled Mandate — from Fee Audit
     cm_mask = fee_base["status"].astype(str).str.upper().str.contains("CLIENT CANCELLED MANDATE", na=False)
     cm_df = fee_base[cm_mask].copy()
     if not cm_df.empty:
@@ -241,7 +236,7 @@ def build_report(fee_content, payment_content):
                 agg_cols[c] = "sum" if c == "amount" else "first"
         cm_df = cm_df.groupby("id_number").agg(agg_cols).reset_index()
 
-    # ---- Metrics (same as dashboard) ----
+    # ---- Metrics ----
     merged = fee_base.merge(
         pmt[["id_number", "payment_stage", "status", "amount", "collection_date"]],
         on=["id_number", "payment_stage"], how="left", suffixes=("", "_pmt")
@@ -269,7 +264,6 @@ def build_report(fee_content, payment_content):
     denom = settled_mtd_v + failed_mtd_v + disputed_mtd_v
     success_rate = (settled_mtd_v / denom * 100) if denom > 0 else 0
 
-    # Revenue calculation
     settled_all = stage12[stage12["status_upper"] == "SETTLED"].copy()
     settled_all = settled_all.sort_values(["id_number", "collection_date"])
     settled_all["rank"] = settled_all.groupby("id_number").cumcount() + 1
@@ -284,7 +278,6 @@ def build_report(fee_content, payment_content):
     settled_all["revenue"] = settled_all.apply(calc_rev, axis=1)
     revenue_total = settled_all[settled_all["collection_date"] >= first_of_month]["revenue"].sum()
 
-    # Future debits
     future_mask = fee_base["status"].astype(str).str.upper().str.contains("FUTURE", na=False)
     future_df = fee_base[future_mask & fee_base["payment_stage"].isin([1, 2])].dropna(subset=["collection_date"])
     tomorrow = today + timedelta(days=1)
@@ -323,24 +316,17 @@ def build_report(fee_content, payment_content):
 
     return metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df
 
-# ---- Build the Excel workbook ----
+# ---- Build main multi-sheet Excel ----
 def build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df):
     output = io.BytesIO()
-    # ---- Using openpyxl (already installed by the workflow) ----
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         dashboard = pd.DataFrame({
             "Metric": [
-                "Settled Period Total",
-                "Failed MTD",
-                "Disputed MTD",
-                "Client Cancelled Mandate",
-                "Sale Not Submitted",
-                "Revenue (Period)",
-                "Success Rate",
-                "Curr Month Debits",
-                "Next Month Debits",
-                "Intracking Clients",
-                "Failed Cycle Count",
+                "Settled Period Total", "Failed MTD", "Disputed MTD",
+                "Client Cancelled Mandate", "Sale Not Submitted",
+                "Revenue (Period)", "Success Rate",
+                "Curr Month Debits", "Next Month Debits",
+                "Intracking Clients", "Failed Cycle Count",
             ],
             "Value": [
                 f"R {metrics['settled_mtd_v']:,.2f}",
@@ -378,6 +364,21 @@ def build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df):
     output.seek(0)
     return output
 
+# ---- Build single-sheet Excel (for SMS-only files) ----
+def build_single_sheet_excel(df, sheet_name):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        if df.empty:
+            pd.DataFrame({"Message": ["No records for this period"]}).to_excel(writer, sheet_name=sheet_name, index=False)
+        else:
+            out_df = df.rename(columns={
+                "id_number": "ID NUMBER", "client_name": "Name", "cell": "Cell",
+                "payment_stage": "Stage", "amount": "Amount", "status": "Status"
+            })
+            out_df.to_excel(writer, sheet_name=sheet_name, index=False)
+    output.seek(0)
+    return output
+
 # ---- Main ----
 def main():
     folder_id = os.getenv("FOLDER_ID")
@@ -412,8 +413,8 @@ def main():
     upload_or_update(service, folder_id, "metrics_history.csv", csv_bytes, "text/csv")
     print("✅ Updated metrics_history.csv on Drive.")
 
-    # ---- Build Excel and upload ----
-    print("📊 Building Excel report...")
+    # ---- Build full Excel and upload ----
+    print("📊 Building full Excel report...")
     excel_bytes = build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df)
     excel_bytes.seek(0)
     upload_or_update(
@@ -423,6 +424,30 @@ def main():
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     print("✅ Uploaded Debt_Review_Report.xlsx to Drive.")
+
+    # ---- Build Failed SMS Excel and upload ----
+    print("📊 Building Failed SMS-only Excel...")
+    failed_sms_bytes = build_single_sheet_excel(failed_sms_df, "Failed SMS")
+    failed_sms_bytes.seek(0)
+    upload_or_update(
+        service, folder_id,
+        "Failed_SMS.xlsx",
+        failed_sms_bytes,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    print("✅ Uploaded Failed_SMS.xlsx to Drive.")
+
+    # ---- Build Intracking SMS Excel and upload ----
+    print("📊 Building Intracking SMS-only Excel...")
+    tracking_sms_bytes = build_single_sheet_excel(tracking_sms_df, "Intracking SMS")
+    tracking_sms_bytes.seek(0)
+    upload_or_update(
+        service, folder_id,
+        "Intracking_SMS.xlsx",
+        tracking_sms_bytes,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    print("✅ Uploaded Intracking_SMS.xlsx to Drive.")
 
 if __name__ == "__main__":
     main()
