@@ -392,7 +392,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         start_dt = None
         end_dt = None
 
-    # ---- NEW: compute the "Settled Period" date range once, up front ----
+    # ---- Compute "Settled Period" date range up front ----
     days_since_friday = (today.weekday() - 4) % 7
     last_friday = today - timedelta(days=days_since_friday)
     first_of_month = today.replace(day=1)
@@ -485,12 +485,12 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             'cancelled_mandate_count': 0, 'sale_not_submitted_count': 0
         }
 
-        # --- Extract Failed (including Disputed and Client Cancelled Mandate) ---
+        # --- Extract Failed (from Payment Report) ---
         failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED', 'DISPUTED', 'CLIENT CANCELLED MANDATE']
         failed_mask = pmt_sms['status'].str.upper().str.contains('|'.join(failed_keywords), na=False)
         failed_pmt = pmt_sms[failed_mask].copy()
 
-        # ---- NEW: only keep failures within the "Settled Period Total" timeframe ----
+        # Only keep failures within the "Settled Period Total" timeframe
         if use_custom_range:
             failed_pmt = failed_pmt[
                 (failed_pmt['collection_date'] >= start_dt) &
@@ -684,8 +684,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     raw['revenue'] = raw.apply(calculate_revenue, axis=1)
     raw_stage_1_2['revenue'] = raw_stage_1_2.apply(calculate_revenue, axis=1)
 
-    # (last_friday / first_of_month were computed at the top)
-
     if use_custom_range:
         settled_today_df = get_settled_df(raw_stage_1_2, end_dt, end_dt)
         settled_cycle_df = get_settled_df(raw_stage_1_2, start_dt, end_dt)
@@ -785,7 +783,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     forecast_admin_app = new_clients_est * 350
     forecast_total = forecast_restructuring + forecast_aftercare + forecast_admin_app + forecast_legal
 
-    # ---- Success Rate ----
     denominator = settled_mtd_v + failed_mtd_v + disputed_mtd_v
     if denominator > 0:
         success_rate = (settled_mtd_v / denominator) * 100
@@ -1004,6 +1001,48 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         if not range_debits_df.empty:
             detail_dfs['Debits Detail'] = range_debits_df[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'due_date']].copy()
             detail_dfs['Debits Detail'].columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Date']
+
+    # ============================================================
+    # 🔧 OVERRIDE: Rebuild Sale Not Submitted & Cancelled Mandate
+    # lists directly from the FEE AUDIT status column
+    # ============================================================
+
+    # --- Sale Not Submitted list (Fee Audit source) ---
+    if not sale_not_submitted_mtd_df.empty:
+        sns_dedup2 = sale_not_submitted_mtd_df.groupby('id_number').agg({
+            'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
+            'amount': 'sum', 'status': 'first'
+        }).reset_index()
+        sale_not_submitted_sms_pmt = pd.DataFrame({
+            'ID NUMBER': sns_dedup2['id_number'].astype(str),
+            'Name': sns_dedup2['client_name'],
+            'Cell': sns_dedup2['cell'],
+            'Stage': sns_dedup2['payment_stage'],
+            'Amount': sns_dedup2['amount'],
+            'Status': sns_dedup2['status']
+        })
+    else:
+        sale_not_submitted_sms_pmt = pd.DataFrame(
+            columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
+
+    # --- Client Cancelled Mandate → append to Failed SMS list (Fee Audit source) ---
+    if not cancelled_mandate_mtd_df.empty:
+        cm_dedup2 = cancelled_mandate_mtd_df.groupby('id_number').agg({
+            'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
+            'amount': 'sum', 'status': 'first'
+        }).reset_index()
+        cm_sms = pd.DataFrame({
+            'ID NUMBER': cm_dedup2['id_number'].astype(str),
+            'Name': cm_dedup2['client_name'],
+            'Cell': cm_dedup2['cell'],
+            'Stage': cm_dedup2['payment_stage'],
+            'Amount': cm_dedup2['amount'],
+            'Status': cm_dedup2['status']
+        })
+        # Avoid duplicates: only append IDs not already in the Failed list
+        existing_ids = set(failed_sms_pmt['ID NUMBER'].astype(str)) if not failed_sms_pmt.empty else set()
+        cm_sms = cm_sms[~cm_sms['ID NUMBER'].astype(str).isin(existing_ids)]
+        failed_sms_pmt = pd.concat([failed_sms_pmt, cm_sms], ignore_index=True)
 
     return {
         'ref_date': today,
@@ -1605,7 +1644,7 @@ def send_bulk_sms(selected_df, message, list_name):
 
 # ---- Failed Clients SMS ----
 st.subheader("📋 Failed Clients (SMS)")
-st.caption("Only clients whose failed payment falls within the current 'Settled Period' timeframe are shown here.")
+st.caption("Includes Failed, Disputed, and Client Cancelled Mandate. Only payments within the current 'Settled Period' timeframe are shown.")
 if not failed_sms.empty:
     select_all_failed = st.checkbox("Select all Failed clients", key="select_all_failed")
     display_failed = failed_sms.copy()
@@ -1662,7 +1701,7 @@ else:
 st.markdown("""
 <div style="margin-top: 32px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">📭 Sale Not Submitted — Send to Sales Department</h3>
-    <p style="color: #6c757d; font-size: 14px;">This list is for your sales team to action. No SMS is sent to these clients.</p>
+    <p style="color: #6c757d; font-size: 14px;">Source: Fee Audit. No SMS is sent to these clients.</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1676,7 +1715,7 @@ if not sale_not_submitted_sms.empty:
         mime="text/csv"
     )
 else:
-    st.info("No clients with 'Sale Not Submitted' status.")
+    st.info("No clients with 'Sale Not Submitted' status in the Fee Audit for the current period.")
 
 # ---- CSV downloads ----
 st.markdown("---")
