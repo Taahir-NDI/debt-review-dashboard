@@ -40,7 +40,7 @@ class GenericSMSProvider:
         return response.json()
 
 # ================================================================
-# 🆔 ID NORMALIZER — Keeps IDs as clean integer strings
+# 🆔 ID & PHONE NORMALIZERS
 # ================================================================
 def normalize_id(val):
     """Convert any ID value to a clean integer-style string."""
@@ -54,6 +54,27 @@ def normalize_id(val):
         return str(val)
     s = str(val).strip()
     if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    return s
+
+def normalize_phone(val):
+    """Convert a phone number to a clean string (preserves leading zeros)."""
+    if pd.isna(val):
+        return ""
+    if isinstance(val, (int, np.integer)):
+        return str(int(val))
+    if isinstance(val, (float, np.floating)):
+        if float(val).is_integer():
+            return str(int(val))
+        return str(val)
+    s = str(val).strip()
+    try:
+        f = float(s)
+        if f.is_integer():
+            return str(int(f))
+    except (ValueError, TypeError):
+        pass
+    if s.endswith(".0"):
         s = s[:-2]
     return s
 
@@ -209,7 +230,7 @@ def find_columns(df):
     if status_col is None:
         status_col = df.columns[-1]
 
-    # ✅ FIX: Prefer "ID NUMBER" over "APPLICANT NUMBER"
+    # Prefer exact "ID NUMBER" over "APPLICANT NUMBER"
     id_col = None
     for col in df.columns:
         if col.strip().upper() == 'ID NUMBER':
@@ -276,14 +297,20 @@ def find_columns(df):
                 name_col = col
                 break
 
+    # ✅ FIX: Prefer exact "CELL" match first
     cell_col = None
     for col in df.columns:
-        if col.strip().upper() == 'CELL':
+        if str(col).strip().upper() == 'CELL':
             cell_col = col
             break
     if cell_col is None:
         for col in df.columns:
-            if 'CELL' in col or 'MOBILE' in col or 'PHONE' in col:
+            if 'CELL' in str(col).upper():
+                cell_col = col
+                break
+    if cell_col is None:
+        for col in df.columns:
+            if 'MOBILE' in str(col).upper() or 'PHONE' in str(col).upper():
                 cell_col = col
                 break
 
@@ -320,7 +347,7 @@ def extract_future_debits(df, sheet_name, filter_future=True):
     else:
         df_future['client_name'] = ''
     if cell_col is not None:
-        df_future['cell'] = df_future[cell_col]
+        df_future['cell'] = df_future[cell_col].apply(normalize_phone)
     else:
         df_future['cell'] = ''
     df_future = df_future.dropna(subset=['id_number', 'payment_stage', 'due_date', 'amount'])
@@ -454,6 +481,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             fee_base[col] = ''
 
     fee_base['id_number'] = fee_base['id_number'].apply(normalize_id)
+    if 'cell' in fee_base.columns:
+        fee_base['cell'] = fee_base['cell'].apply(normalize_phone)
     fee_base['payment_stage'] = pd.to_numeric(fee_base['payment_stage'], errors='coerce')
     fee_base['amount'] = pd.to_numeric(fee_base['amount'], errors='coerce')
     fee_base['collection_date'] = pd.to_datetime(fee_base['collection_date'], errors='coerce')
@@ -495,6 +524,9 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         pmt_sms['amount'] = pd.to_numeric(pmt_sms['amount'], errors='coerce')
         pmt_sms['collection_date'] = pd.to_datetime(pmt_sms['collection_date'], errors='coerce')
         pmt_sms['id_number'] = pmt_sms['id_number'].apply(normalize_id)
+        # ✅ FIX: Clean cell numbers
+        if 'cell' in pmt_sms.columns:
+            pmt_sms['cell'] = pmt_sms['cell'].apply(normalize_phone)
         pmt_sms = pmt_sms.dropna(subset=['id_number', 'payment_stage', 'amount'])
 
         pmt_debug = {
@@ -507,10 +539,23 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             'cancelled_mandate_count': 0, 'sale_not_submitted_count': 0
         }
 
-        # ✅ Failed SMS list — all Failed/Disputed (no date restriction)
+        # ================================================================
+        # Failed SMS list — only clients within Settled Period Total window
+        # ================================================================
         failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED', 'DISPUTED', 'CLIENT CANCELLED MANDATE']
         failed_mask = pmt_sms['status'].str.upper().str.contains('|'.join(failed_keywords), na=False)
         failed_pmt = pmt_sms[failed_mask].copy()
+        # Filter to "Settled Period Total" window
+        if use_custom_range:
+            failed_pmt = failed_pmt[
+                (failed_pmt['collection_date'] >= start_dt) &
+                (failed_pmt['collection_date'] <= end_dt)
+            ]
+        else:
+            failed_pmt = failed_pmt[
+                (failed_pmt['collection_date'] >= last_friday) &
+                (failed_pmt['collection_date'] <= today)
+            ]
 
         pmt_debug['failed_count'] = len(failed_pmt)
 
@@ -589,6 +634,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                 raw_pmt.rename(columns={old: new}, inplace=True)
 
         raw_pmt['id_number'] = raw_pmt['id_number'].apply(normalize_id)
+        if 'cell_pmt' in raw_pmt.columns:
+            raw_pmt['cell_pmt'] = raw_pmt['cell_pmt'].apply(normalize_phone)
         raw_pmt['payment_stage_pmt'] = pd.to_numeric(raw_pmt['payment_stage_pmt'], errors='coerce')
 
         pmt_cols = ['id_number', 'payment_stage_pmt', 'collection_date_pmt', 'settlement_date_pmt',
@@ -622,6 +669,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                      'collection_date_pmt', 'settlement_date_pmt', 'dispute_date_pmt', 'cancelled_date_pmt']
         merged.drop(columns=[c for c in drop_cols if c in merged.columns], inplace=True, errors='ignore')
 
+        # Keep "Client Cancelled Mandate" rows, remove generic cancellations
         status_upper_series = merged['status'].astype(str).str.upper()
         cancelled_mask = status_upper_series.str.contains('CANCELLED', na=False)
         keep_mask = status_upper_series.str.contains('CLIENT CANCELLED MANDATE', na=False)
@@ -818,7 +866,10 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             df_temp = df_temp[df_temp['amount'] > 0]
             df_temp['id_number'] = df_temp[id_col].apply(normalize_id)
             df_temp['client_name'] = df_temp[name_col] if name_col else ''
-            df_temp['cell'] = df_temp[cell_col] if cell_col else ''
+            if cell_col:
+                df_temp['cell'] = df_temp[cell_col].apply(normalize_phone)
+            else:
+                df_temp['cell'] = ''
             df_temp['payment_stage'] = pd.to_numeric(df_temp[stage_col], errors='coerce')
             return df_temp[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'due_date']]
 
@@ -1631,7 +1682,7 @@ def send_bulk_sms(selected_df, message, list_name):
         st.warning(f"⚠️ Sent {success_count} out of {len(selected_df)}. Failed: {', '.join(failed_list)}")
 
 st.subheader("📋 Failed Clients (SMS)")
-st.caption("Includes all Failed, Disputed, and Client Cancelled Mandate clients from the Payment Status Report.")
+st.caption("Includes Failed, Disputed, and Client Cancelled Mandate clients within the current Settled Period.")
 if not failed_sms.empty:
     select_all_failed = st.checkbox("Select all Failed clients", key="select_all_failed")
     display_failed = failed_sms.copy()
@@ -1751,7 +1802,7 @@ with st.expander("🔍 Data Preview (Debugging)"):
             st.dataframe(pd.DataFrame(pmt_debug['pmt_sms_sample']), width='stretch')
         else:
             st.warning("Cleaned Payment Report is empty – check column detection.")
-        st.write(f"**Rows matching 'Failed/Disputed/Cancelled Mandate' keywords (ALL):** {pmt_debug['failed_count']}")
+        st.write(f"**Rows matching 'Failed/Disputed/Cancelled Mandate' keywords (within period):** {pmt_debug['failed_count']}")
         st.write(f"**Rows matching 'Tracking/Intracking' keywords:** {pmt_debug['tracking_count']}")
         st.write(f"**Rows matching 'Disputed' only:** {pmt_debug['disputed_count']}")
         st.write(f"**Rows matching 'Client Cancelled Mandate' only:** {pmt_debug['cancelled_mandate_count']}")
