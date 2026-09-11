@@ -2,8 +2,8 @@ name: Send Email Report
 
 on:
   schedule:
-    - cron: '0 */8 * * *'   # Every 8 hours (00:00, 08:00, 16:00 UTC)
-  workflow_dispatch:         # Manual trigger
+    - cron: '0 */8 * * *'
+  workflow_dispatch:
 
 jobs:
   send_email:
@@ -23,12 +23,11 @@ jobs:
 
       - name: Send email via SendGrid
         env:
-          # ---- SendGrid ----
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          TO_EMAIL_SMS: ${{ secrets.TO_EMAIL_SMS }}
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
-          # ---- Google Drive ----
           FOLDER_ID: ${{ secrets.FOLDER_ID }}
           PROJECT_ID: ${{ secrets.PROJECT_ID }}
           PRIVATE_KEY_ID: ${{ secrets.PRIVATE_KEY_ID }}
