@@ -40,6 +40,24 @@ class GenericSMSProvider:
         return response.json()
 
 # ================================================================
+# 🆔 ID NORMALIZER — Keeps IDs as clean integer strings
+# ================================================================
+def normalize_id(val):
+    """Convert any ID value to a clean integer-style string."""
+    if pd.isna(val):
+        return ""
+    if isinstance(val, (int, np.integer)):
+        return str(int(val))
+    if isinstance(val, (float, np.floating)):
+        if float(val).is_integer():
+            return str(int(val))
+        return str(val)
+    s = str(val).strip()
+    if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    return s
+
+# ================================================================
 # 0. CUSTOM STYLES
 # ================================================================
 st.set_page_config(page_title="Debt Review Dashboard", layout="wide")
@@ -294,7 +312,7 @@ def extract_future_debits(df, sheet_name, filter_future=True):
         df_future['due_date'] = pd.to_datetime(df_future[date_col], errors='coerce')
     else:
         df_future['due_date'] = pd.NaT
-    df_future['id_number'] = df_future[id_col].astype(str).str.strip()
+    df_future['id_number'] = df_future[id_col].apply(normalize_id)
     df_future['amount'] = pd.to_numeric(df_future[amount_col], errors='coerce')
     if name_col is not None:
         df_future['client_name'] = df_future[name_col]
@@ -392,7 +410,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         start_dt = None
         end_dt = None
 
-    # ---- Compute "Settled Period" date range up front ----
+    # Settled Period Total = last Friday → today
     days_since_friday = (today.weekday() - 4) % 7
     last_friday = today - timedelta(days=days_since_friday)
     first_of_month = today.replace(day=1)
@@ -431,10 +449,17 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     if cell_col is not None:
         fee_base.rename(columns={cell_col: 'cell'}, inplace=True)
 
+    # Ensure all downstream-required columns exist
+    for col in ['client_name', 'cell', 'collection_date']:
+        if col not in fee_base.columns:
+            fee_base[col] = ''
+
+    # ✅ FIX: Use normalize_id to clean Fee Audit IDs
+    fee_base['id_number'] = fee_base['id_number'].apply(normalize_id)
+
     fee_base['payment_stage'] = pd.to_numeric(fee_base['payment_stage'], errors='coerce')
-    if 'collection_date' in fee_base.columns:
-        fee_base['collection_date'] = pd.to_datetime(fee_base['collection_date'], errors='coerce')
-    fee_base['id_number'] = fee_base['id_number'].astype(str).str.strip()
+    fee_base['amount'] = pd.to_numeric(fee_base['amount'], errors='coerce')
+    fee_base['collection_date'] = pd.to_datetime(fee_base['collection_date'], errors='coerce')
     fee_base['status'] = fee_base['status'].astype(str).str.strip()
     fee_base = fee_base.dropna(subset=['id_number', 'payment_stage'])
 
@@ -472,7 +497,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         pmt_sms['payment_stage'] = pd.to_numeric(pmt_sms['payment_stage'], errors='coerce')
         pmt_sms['amount'] = pd.to_numeric(pmt_sms['amount'], errors='coerce')
         pmt_sms['collection_date'] = pd.to_datetime(pmt_sms['collection_date'], errors='coerce')
-        pmt_sms['id_number'] = pmt_sms['id_number'].astype(str).str.strip()
+        # ✅ FIX: Clean IDs
+        pmt_sms['id_number'] = pmt_sms['id_number'].apply(normalize_id)
         pmt_sms = pmt_sms.dropna(subset=['id_number', 'payment_stage', 'amount'])
 
         pmt_debug = {
@@ -485,22 +511,14 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             'cancelled_mandate_count': 0, 'sale_not_submitted_count': 0
         }
 
-        # --- Extract Failed (from Payment Report) ---
+        # ================================================================
+        # ✅ FIX: Failed SMS list now includes ALL Failed/Disputed clients
+        #    (no date restriction to last Friday → today)
+        # ================================================================
         failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED', 'DISPUTED', 'CLIENT CANCELLED MANDATE']
         failed_mask = pmt_sms['status'].str.upper().str.contains('|'.join(failed_keywords), na=False)
         failed_pmt = pmt_sms[failed_mask].copy()
-
-        # Only keep failures within the "Settled Period Total" timeframe
-        if use_custom_range:
-            failed_pmt = failed_pmt[
-                (failed_pmt['collection_date'] >= start_dt) &
-                (failed_pmt['collection_date'] <= end_dt)
-            ]
-        else:
-            failed_pmt = failed_pmt[
-                (failed_pmt['collection_date'] >= last_friday) &
-                (failed_pmt['collection_date'] <= today)
-            ]
+        # (No date filter — all failures included)
 
         pmt_debug['failed_count'] = len(failed_pmt)
 
@@ -578,7 +596,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             if old in raw_pmt.columns:
                 raw_pmt.rename(columns={old: new}, inplace=True)
 
-        raw_pmt['id_number'] = raw_pmt['id_number'].astype(str).str.strip()
+        # ✅ FIX: Clean IDs
+        raw_pmt['id_number'] = raw_pmt['id_number'].apply(normalize_id)
         raw_pmt['payment_stage_pmt'] = pd.to_numeric(raw_pmt['payment_stage_pmt'], errors='coerce')
 
         pmt_cols = ['id_number', 'payment_stage_pmt', 'collection_date_pmt', 'settlement_date_pmt',
@@ -808,7 +827,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                 df_temp = df_temp[~cancel_mask]
             df_temp = df_temp.dropna(subset=['due_date', 'amount'])
             df_temp = df_temp[df_temp['amount'] > 0]
-            df_temp['id_number'] = df_temp[id_col].astype(str).str.strip()
+            df_temp['id_number'] = df_temp[id_col].apply(normalize_id)
             df_temp['client_name'] = df_temp[name_col] if name_col else ''
             df_temp['cell'] = df_temp[cell_col] if cell_col else ''
             df_temp['payment_stage'] = pd.to_numeric(df_temp[stage_col], errors='coerce')
@@ -931,7 +950,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         if 'id_number' not in df.columns:
             id_candidates = [col for col in df.columns if 'id' in col.lower() or 'number' in col.lower()]
             if id_candidates:
-                df['id_number'] = df[id_candidates[0]]
+                df['id_number'] = df[id_candidates[0]].apply(normalize_id)
             else:
                 df['id_number'] = df.index.astype(str)
         return df.sort_values('collection_date').groupby('id_number').apply(lambda g: g.iloc[-1]).reset_index(drop=True)
@@ -1002,12 +1021,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             detail_dfs['Debits Detail'] = range_debits_df[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'due_date']].copy()
             detail_dfs['Debits Detail'].columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Date']
 
-    # ============================================================
-    # 🔧 OVERRIDE: Rebuild Sale Not Submitted & Cancelled Mandate
-    # lists directly from the FEE AUDIT status column
-    # ============================================================
-
-    # --- Sale Not Submitted list (Fee Audit source) ---
+    # ---- OVERRIDE: Rebuild Sale Not Submitted & Cancelled Mandate from Fee Audit ----
     if not sale_not_submitted_mtd_df.empty:
         sns_dedup2 = sale_not_submitted_mtd_df.groupby('id_number').agg({
             'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
@@ -1025,7 +1039,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         sale_not_submitted_sms_pmt = pd.DataFrame(
             columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
 
-    # --- Client Cancelled Mandate → append to Failed SMS list (Fee Audit source) ---
     if not cancelled_mandate_mtd_df.empty:
         cm_dedup2 = cancelled_mandate_mtd_df.groupby('id_number').agg({
             'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
@@ -1039,7 +1052,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             'Amount': cm_dedup2['amount'],
             'Status': cm_dedup2['status']
         })
-        # Avoid duplicates: only append IDs not already in the Failed list
         existing_ids = set(failed_sms_pmt['ID NUMBER'].astype(str)) if not failed_sms_pmt.empty else set()
         cm_sms = cm_sms[~cm_sms['ID NUMBER'].astype(str).isin(existing_ids)]
         failed_sms_pmt = pd.concat([failed_sms_pmt, cm_sms], ignore_index=True)
@@ -1644,7 +1656,7 @@ def send_bulk_sms(selected_df, message, list_name):
 
 # ---- Failed Clients SMS ----
 st.subheader("📋 Failed Clients (SMS)")
-st.caption("Includes Failed, Disputed, and Client Cancelled Mandate. Only payments within the current 'Settled Period' timeframe are shown.")
+st.caption("Includes all Failed, Disputed, and Client Cancelled Mandate clients from the Payment Status Report.")
 if not failed_sms.empty:
     select_all_failed = st.checkbox("Select all Failed clients", key="select_all_failed")
     display_failed = failed_sms.copy()
@@ -1771,7 +1783,7 @@ with st.expander("🔍 Data Preview (Debugging)"):
             st.dataframe(pd.DataFrame(pmt_debug['pmt_sms_sample']), width='stretch')
         else:
             st.warning("Cleaned Payment Report is empty – check column detection.")
-        st.write(f"**Rows matching 'Failed/Disputed/Cancelled Mandate' keywords (within period):** {pmt_debug['failed_count']}")
+        st.write(f"**Rows matching 'Failed/Disputed/Cancelled Mandate' keywords (ALL):** {pmt_debug['failed_count']}")
         st.write(f"**Rows matching 'Tracking/Intracking' keywords:** {pmt_debug['tracking_count']}")
         st.write(f"**Rows matching 'Disputed' only:** {pmt_debug['disputed_count']}")
         st.write(f"**Rows matching 'Client Cancelled Mandate' only:** {pmt_debug['cancelled_mandate_count']}")
