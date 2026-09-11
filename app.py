@@ -209,14 +209,15 @@ def find_columns(df):
     if status_col is None:
         status_col = df.columns[-1]
 
+    # ✅ FIX: Prefer "ID NUMBER" over "APPLICANT NUMBER"
     id_col = None
     for col in df.columns:
-        if col.strip().upper() == 'APPLICANT NUMBER':
+        if col.strip().upper() == 'ID NUMBER':
             id_col = col
             break
     if id_col is None:
         for col in df.columns:
-            if col.strip().upper() == 'ID NUMBER':
+            if col.strip().upper() == 'APPLICANT NUMBER':
                 id_col = col
                 break
     if id_col is None:
@@ -410,7 +411,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         start_dt = None
         end_dt = None
 
-    # Settled Period Total = last Friday → today
     days_since_friday = (today.weekday() - 4) % 7
     last_friday = today - timedelta(days=days_since_friday)
     first_of_month = today.replace(day=1)
@@ -449,14 +449,11 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     if cell_col is not None:
         fee_base.rename(columns={cell_col: 'cell'}, inplace=True)
 
-    # Ensure all downstream-required columns exist
     for col in ['client_name', 'cell', 'collection_date']:
         if col not in fee_base.columns:
             fee_base[col] = ''
 
-    # ✅ FIX: Use normalize_id to clean Fee Audit IDs
     fee_base['id_number'] = fee_base['id_number'].apply(normalize_id)
-
     fee_base['payment_stage'] = pd.to_numeric(fee_base['payment_stage'], errors='coerce')
     fee_base['amount'] = pd.to_numeric(fee_base['amount'], errors='coerce')
     fee_base['collection_date'] = pd.to_datetime(fee_base['collection_date'], errors='coerce')
@@ -497,7 +494,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         pmt_sms['payment_stage'] = pd.to_numeric(pmt_sms['payment_stage'], errors='coerce')
         pmt_sms['amount'] = pd.to_numeric(pmt_sms['amount'], errors='coerce')
         pmt_sms['collection_date'] = pd.to_datetime(pmt_sms['collection_date'], errors='coerce')
-        # ✅ FIX: Clean IDs
         pmt_sms['id_number'] = pmt_sms['id_number'].apply(normalize_id)
         pmt_sms = pmt_sms.dropna(subset=['id_number', 'payment_stage', 'amount'])
 
@@ -511,14 +507,10 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             'cancelled_mandate_count': 0, 'sale_not_submitted_count': 0
         }
 
-        # ================================================================
-        # ✅ FIX: Failed SMS list now includes ALL Failed/Disputed clients
-        #    (no date restriction to last Friday → today)
-        # ================================================================
+        # ✅ Failed SMS list — all Failed/Disputed (no date restriction)
         failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED', 'DISPUTED', 'CLIENT CANCELLED MANDATE']
         failed_mask = pmt_sms['status'].str.upper().str.contains('|'.join(failed_keywords), na=False)
         failed_pmt = pmt_sms[failed_mask].copy()
-        # (No date filter — all failures included)
 
         pmt_debug['failed_count'] = len(failed_pmt)
 
@@ -596,7 +588,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             if old in raw_pmt.columns:
                 raw_pmt.rename(columns={old: new}, inplace=True)
 
-        # ✅ FIX: Clean IDs
         raw_pmt['id_number'] = raw_pmt['id_number'].apply(normalize_id)
         raw_pmt['payment_stage_pmt'] = pd.to_numeric(raw_pmt['payment_stage_pmt'], errors='coerce')
 
@@ -631,7 +622,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                      'collection_date_pmt', 'settlement_date_pmt', 'dispute_date_pmt', 'cancelled_date_pmt']
         merged.drop(columns=[c for c in drop_cols if c in merged.columns], inplace=True, errors='ignore')
 
-        # Keep "Client Cancelled Mandate" rows, remove generic cancellations
         status_upper_series = merged['status'].astype(str).str.upper()
         cancelled_mask = status_upper_series.str.contains('CANCELLED', na=False)
         keep_mask = status_upper_series.str.contains('CLIENT CANCELLED MANDATE', na=False)
@@ -808,7 +798,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     else:
         success_rate = 0
 
-    # ---- DEBITS ----
     if use_custom_range:
         def extract_all_debits(df, sheet_name):
             if df is None or df.empty:
@@ -882,7 +871,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                     next_debits_v = 0
                 range_debits_df = pd.concat([current_future, next_future], ignore_index=True)
 
-    # ---- Priority Queue ----
     priority_df = raw[(raw['status'].str.upper().isin(['FAILED', 'TRACKING', 'INTRACKING'])) |
                       ((raw['payment_stage'].isin([1, 2, 3])) &
                        (raw['status'].str.upper().isin(['FAILED', 'TRACKING', 'INTRACKING', 'LATE'])))]
@@ -943,7 +931,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         cols = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level']
         combined_priority = pd.DataFrame(columns=cols)
 
-    # ---- Failed Clients list ----
     def get_latest_record_for_sheet(df):
         if df.empty:
             return df
@@ -1021,7 +1008,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             detail_dfs['Debits Detail'] = range_debits_df[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'due_date']].copy()
             detail_dfs['Debits Detail'].columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Date']
 
-    # ---- OVERRIDE: Rebuild Sale Not Submitted & Cancelled Mandate from Fee Audit ----
     if not sale_not_submitted_mtd_df.empty:
         sns_dedup2 = sale_not_submitted_mtd_df.groupby('id_number').agg({
             'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
@@ -1275,7 +1261,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ---- Row 1: Main KPIs ----
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.markdown(f"""
@@ -1323,7 +1308,6 @@ with col4:
     </div>
     """, unsafe_allow_html=True)
 
-# ---- Row 2: Additional KPIs ----
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.markdown(f"""
@@ -1358,7 +1342,6 @@ with col4:
     </div>
     """, unsafe_allow_html=True)
 
-# ---- Row 3: In Progress ----
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">🔄 In Progress (Stage 1/2)</h3>
@@ -1399,7 +1382,6 @@ with col4:
     </div>
     """, unsafe_allow_html=True)
 
-# ---- Row 4: Independent Statuses ----
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">📌 Independent Statuses (not counted as failures)</h3>
@@ -1432,7 +1414,6 @@ with col3:
     </div>
     """, unsafe_allow_html=True)
 
-# ---- Row 5: Debits ----
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">📅 Upcoming Debits (Stage 1/2)</h3>
@@ -1484,7 +1465,6 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-# ---- Charts ----
 st.subheader("📊 Visual Analytics")
 
 col1, col2 = st.columns(2)
@@ -1534,7 +1514,6 @@ with col2:
             st.info("No priority data available.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ---- Historical Trends ----
 history_file = "history/metrics_history.csv"
 os.makedirs(os.path.dirname(history_file), exist_ok=True)
 
@@ -1615,9 +1594,6 @@ if os.path.exists(history_file):
     except:
         pass
 
-# ================================================================
-# 📱 SMS SENDING SECTION
-# ================================================================
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">📱 Send SMS Messages</h3>
@@ -1654,7 +1630,6 @@ def send_bulk_sms(selected_df, message, list_name):
     else:
         st.warning(f"⚠️ Sent {success_count} out of {len(selected_df)}. Failed: {', '.join(failed_list)}")
 
-# ---- Failed Clients SMS ----
 st.subheader("📋 Failed Clients (SMS)")
 st.caption("Includes all Failed, Disputed, and Client Cancelled Mandate clients from the Payment Status Report.")
 if not failed_sms.empty:
@@ -1681,7 +1656,6 @@ if not failed_sms.empty:
 else:
     st.info("No failed clients in the current period.")
 
-# ---- Intracking Clients SMS ----
 st.subheader("📋 Intracking Clients (SMS)")
 if not tracking_sms.empty:
     select_all_tracking = st.checkbox("Select all Intracking clients", key="select_all_tracking")
@@ -1707,9 +1681,6 @@ if not tracking_sms.empty:
 else:
     st.info("No intracking clients.")
 
-# ================================================================
-# 📭 SALE NOT SUBMITTED LIST
-# ================================================================
 st.markdown("""
 <div style="margin-top: 32px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">📭 Sale Not Submitted — Send to Sales Department</h3>
@@ -1729,7 +1700,6 @@ if not sale_not_submitted_sms.empty:
 else:
     st.info("No clients with 'Sale Not Submitted' status in the Fee Audit for the current period.")
 
-# ---- CSV downloads ----
 st.markdown("---")
 st.subheader("📥 Export SMS Lists (CSV)")
 col1, col2 = st.columns(2)
@@ -1746,7 +1716,6 @@ with col2:
     else:
         st.info("No intracking clients to export.")
 
-# ---- Priority Queue ----
 st.subheader("🔴 Priority Queue")
 if not combined_priority.empty:
     def color_priority(val):
@@ -1761,7 +1730,6 @@ if not combined_priority.empty:
 else:
     st.info("No clients in the priority queue.")
 
-# ---- Data Preview ----
 with st.expander("🔍 Data Preview (Debugging)"):
     st.subheader("Summary")
     st.write(f"**Total rows after merge:** {len(raw)}")
@@ -1799,7 +1767,6 @@ with st.expander("🔍 Data Preview (Debugging)"):
         status_counts.columns = ['Status', 'Count']
         st.dataframe(status_counts, width='stretch')
 
-# ---- Download full Excel report ----
 st.subheader("📥 Download Full Excel Report")
 
 def generate_excel():
