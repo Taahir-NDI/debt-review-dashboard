@@ -335,15 +335,16 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             temp = temp[temp['collection_date'] <= end_date]
         return temp
 
+    # ---- FIX: use .astype(str) for safe substring matching ----
     def get_cancelled_mandate_df(df, start_date=None, end_date=None):
-        temp = df[df['status'].str.upper().str.contains('CLIENT CANCELLED MANDATE', na=False)]
+        temp = df[df['status'].astype(str).str.upper().str.contains('CLIENT CANCELLED MANDATE', na=False)]
         if start_date and end_date:
             temp = temp[temp['collection_date'] >= start_date]
             temp = temp[temp['collection_date'] <= end_date]
         return temp
 
     def get_sale_not_submitted_df(df, start_date=None, end_date=None):
-        temp = df[df['status'].str.upper().str.contains('SALE NOT SUBMITTED', na=False)]
+        temp = df[df['status'].astype(str).str.upper().str.contains('SALE NOT SUBMITTED', na=False)]
         if start_date and end_date:
             temp = temp[temp['collection_date'] >= start_date]
             temp = temp[temp['collection_date'] <= end_date]
@@ -480,19 +481,16 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             'cancelled_mandate_count': 0, 'sale_not_submitted_count': 0
         }
 
-        # --- Failed SMS list now includes FAILED, DISPUTED, and CLIENT CANCELLED MANDATE ---
         failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED', 'DISPUTED', 'CLIENT CANCELLED MANDATE']
         failed_mask = pmt_sms['status'].str.upper().str.contains('|'.join(failed_keywords), na=False)
         failed_pmt = pmt_sms[failed_mask].copy()
         pmt_debug['failed_count'] = len(failed_pmt)
 
-        # --- Tracking/Intracking ---
         tracking_keywords = ['TRACKING', 'INTRACKING', 'PENDING', 'OUTSTANDING']
         tracking_mask = pmt_sms['status'].str.upper().str.contains('|'.join(tracking_keywords), na=False)
         tracking_pmt = pmt_sms[tracking_mask].copy()
         pmt_debug['tracking_count'] = len(tracking_pmt)
 
-        # --- Sale Not Submitted (separate list, no SMS) ---
         sale_not_submitted_mask = pmt_sms['status'].str.upper().str.contains('SALE NOT SUBMITTED', na=False)
         sale_not_submitted_pmt = pmt_sms[sale_not_submitted_mask].copy()
 
@@ -531,7 +529,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         else:
             sale_not_submitted_sms_pmt = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Status'])
 
-        # ---- Prepare raw payment data for merge ----
         payment_id_col = None
         for col in raw_pmt.columns:
             if col.strip().upper() == 'ID NUMBER':
@@ -597,9 +594,11 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
                      'collection_date_pmt', 'settlement_date_pmt', 'dispute_date_pmt', 'cancelled_date_pmt']
         merged.drop(columns=[c for c in drop_cols if c in merged.columns], inplace=True, errors='ignore')
 
-        cancelled_keywords = ['cancelled', 'Cancelled', 'CANCELLED', 'RMS - Cancelled', 'RMS - Cancelled - Inactive']
-        cancelled_mask = merged['status'].astype(str).str.contains('|'.join(cancelled_keywords), na=False)
-        merged = merged[~cancelled_mask].copy()
+        # ---- FIX: keep "Client Cancelled Mandate" rows, remove generic cancellations ----
+        status_upper_series = merged['status'].astype(str).str.upper()
+        cancelled_mask = status_upper_series.str.contains('CANCELLED', na=False)
+        keep_mask = status_upper_series.str.contains('CLIENT CANCELLED MANDATE', na=False)
+        merged = merged[~(cancelled_mask & ~keep_mask)].copy()
 
         if merged.empty:
             return None
@@ -1333,7 +1332,7 @@ with col4:
     </div>
     """, unsafe_allow_html=True)
 
-# ---- Row 4: Independent Statuses (Cancelled Mandate, Sale Not Submitted, Disputed) ----
+# ---- Row 4: Independent Statuses ----
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">📌 Independent Statuses (not counted as failures)</h3>
@@ -1588,7 +1587,7 @@ def send_bulk_sms(selected_df, message, list_name):
     else:
         st.warning(f"⚠️ Sent {success_count} out of {len(selected_df)}. Failed: {', '.join(failed_list)}")
 
-# ---- Failed Clients SMS (includes Failed, Disputed, Client Cancelled Mandate) ----
+# ---- Failed Clients SMS ----
 st.subheader("📋 Failed Clients (SMS)")
 if not failed_sms.empty:
     select_all_failed = st.checkbox("Select all Failed clients", key="select_all_failed")
@@ -1641,7 +1640,7 @@ else:
     st.info("No intracking clients.")
 
 # ================================================================
-# 📭 SALE NOT SUBMITTED LIST (NO SMS — for sales department)
+# 📭 SALE NOT SUBMITTED LIST
 # ================================================================
 st.markdown("""
 <div style="margin-top: 32px; margin-bottom: 16px;">
@@ -1662,7 +1661,7 @@ if not sale_not_submitted_sms.empty:
 else:
     st.info("No clients with 'Sale Not Submitted' status.")
 
-# ---- CSV download buttons ----
+# ---- CSV downloads ----
 st.markdown("---")
 st.subheader("📥 Export SMS Lists (CSV)")
 col1, col2 = st.columns(2)
