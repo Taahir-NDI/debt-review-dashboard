@@ -43,7 +43,6 @@ class GenericSMSProvider:
 # 🆔 ID & PHONE NORMALIZERS
 # ================================================================
 def normalize_id(val):
-    """Convert any ID value to a clean integer-style string."""
     if pd.isna(val):
         return ""
     if isinstance(val, (int, np.integer)):
@@ -58,7 +57,6 @@ def normalize_id(val):
     return s
 
 def normalize_phone(val):
-    """Convert a phone number to a clean string (preserves leading zeros)."""
     if pd.isna(val):
         return ""
     if isinstance(val, (int, np.integer)):
@@ -104,7 +102,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ================================================================
-# 1. SIDEBAR – OPTIONS
+# 1. SIDEBAR
 # ================================================================
 st.sidebar.markdown("""
 <div style="padding: 10px 0 20px 0; text-align: center; color: #1e1e2d;">
@@ -145,7 +143,7 @@ else:
     date_range = None
 
 # ================================================================
-# 2. GOOGLE DRIVE AUTHENTICATION & DOWNLOAD
+# 2. GOOGLE DRIVE AUTH
 # ================================================================
 def download_file_from_drive(service, file_id):
     request = service.files().get_media(fileId=file_id)
@@ -353,7 +351,7 @@ def extract_future_debits(df, sheet_name, filter_future=True):
     return df_future
 
 # ================================================================
-# ---- Core processing function (cached) ----
+# ---- Core processing function ----
 # ================================================================
 @st.cache_data
 def process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode=False, ref_date=None, forecast_mode=False, date_range=None):
@@ -536,7 +534,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             'cancelled_mandate_count': 0, 'sale_not_submitted_count': 0
         }
 
-        # ---- Failed SMS list — only clients within Settled Period Total window ----
         failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED', 'DISPUTED', 'CLIENT CANCELLED MANDATE']
         failed_mask = pmt_sms['status'].str.upper().str.contains('|'.join(failed_keywords), na=False)
         failed_pmt = pmt_sms[failed_mask].copy()
@@ -575,7 +572,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         tracking_pmt_unique = get_latest_per_client(tracking_pmt)
         sale_not_submitted_unique = get_latest_per_client(sale_not_submitted_pmt)
 
-        # Build SMS lists in the desired column order: Cell, Name, ID NUMBER, Stage, Amount, Status
         sms_cols = ['cell', 'client_name', 'id_number', 'payment_stage', 'amount', 'status']
 
         def build_sms_df(src):
@@ -678,6 +674,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     else:
         raw['effective_settlement_date'] = raw['collection_date']
 
+    # NOTE: This filter is applied to 'raw', but Sale Not Submitted now uses
+    # 'fee_base' directly, so it is not affected by this date cut.
     if use_custom_range:
         raw = raw[raw['effective_settlement_date'] >= start_dt]
         raw = raw[raw['effective_settlement_date'] <= end_dt]
@@ -749,10 +747,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         cancelled_mandate_mtd_v = cancelled_mandate_mtd_df['amount'].sum()
         cancelled_mandate_c = len(cancelled_mandate_mtd_df)
 
-        sale_not_submitted_mtd_df = get_sale_not_submitted_df(raw_stage_1_2, start_dt, end_dt)
-        sale_not_submitted_mtd_v = sale_not_submitted_mtd_df['amount'].sum()
-        sale_not_submitted_c = len(sale_not_submitted_mtd_df)
-
         current_month_settled = raw_stage_1_2[
             (raw_stage_1_2['status'].str.upper() == 'SETTLED') &
             (raw_stage_1_2['effective_settlement_date'] >= start_dt) &
@@ -776,15 +770,39 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         cancelled_mandate_mtd_v = cancelled_mandate_mtd_df['amount'].sum()
         cancelled_mandate_c = len(cancelled_mandate_mtd_df)
 
-        sale_not_submitted_mtd_df = get_sale_not_submitted_df(raw_stage_1_2, first_of_month, today)
-        sale_not_submitted_mtd_v = sale_not_submitted_mtd_df['amount'].sum()
-        sale_not_submitted_c = len(sale_not_submitted_mtd_df)
-
         current_month_settled = raw_stage_1_2[
             (raw_stage_1_2['status'].str.upper() == 'SETTLED') &
             (raw_stage_1_2['effective_settlement_date'] >= first_of_month) &
             (raw_stage_1_2['effective_settlement_date'] <= today)
         ]
+
+    # ================================================================
+    # ✅ FIX: Sale Not Submitted — pull directly from fee_base (the raw
+    # Fee Audit sheet) with NO date or stage restriction. The Fee Audit
+    # sheet itself represents the current month, so we simply filter by
+    # status to capture every "Sale Not Submitted" record for this month.
+    # ================================================================
+    sale_not_submitted_mtd_df = fee_base[
+        fee_base['status'].astype(str).str.upper().str.contains('SALE NOT SUBMITTED', na=False)
+    ].copy()
+
+    # Deduplicate: one row per client (grouped by id_number)
+    if not sale_not_submitted_mtd_df.empty:
+        sale_not_submitted_dedup = sale_not_submitted_mtd_df.groupby('id_number').agg({
+            'client_name': 'first',
+            'cell': 'first',
+            'payment_stage': 'first',
+            'amount': 'sum',
+            'status': 'first',
+            'collection_date': 'max'
+        }).reset_index()
+    else:
+        sale_not_submitted_dedup = pd.DataFrame(columns=[
+            'id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'status', 'collection_date'
+        ])
+
+    sale_not_submitted_mtd_v = sale_not_submitted_dedup['amount'].sum() if not sale_not_submitted_dedup.empty else 0
+    sale_not_submitted_c = len(sale_not_submitted_dedup)
 
     if not tracking_temp.empty:
         tracking_df = tracking_temp.groupby('id_number').agg({
@@ -1030,12 +1048,9 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         }).reset_index()
         detail_dfs['Client Cancelled Mandate'] = prep_detail_df(cm_dedup, 'collection_date')
 
-    if not sale_not_submitted_mtd_df.empty:
-        sns_dedup = sale_not_submitted_mtd_df.groupby('id_number').agg({
-            'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
-            'amount': 'sum', 'status': 'first', 'collection_date': 'max'
-        }).reset_index()
-        detail_dfs['Sale Not Submitted'] = prep_detail_df(sns_dedup, 'collection_date')
+    # ✅ Sale Not Submitted detail sheet — uses the full-month dedup
+    if not sale_not_submitted_dedup.empty:
+        detail_dfs['Sale Not Submitted'] = prep_detail_df(sale_not_submitted_dedup, 'collection_date')
 
     if use_custom_range and not range_debits_df.empty:
         detail_dfs['Total Due Period'] = range_debits_df[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'due_date']].copy()
@@ -1045,25 +1060,20 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             detail_dfs['Debits Detail'] = range_debits_df[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'due_date']].copy()
             detail_dfs['Debits Detail'].columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Date']
 
-    # Sale Not Submitted — from Fee Audit — reorder columns
-    if not sale_not_submitted_mtd_df.empty:
-        sns_dedup2 = sale_not_submitted_mtd_df.groupby('id_number').agg({
-            'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
-            'amount': 'sum', 'status': 'first'
-        }).reset_index()
+    # ✅ Sale Not Submitted SMS list — built from the full-month dedup
+    if not sale_not_submitted_dedup.empty:
         sale_not_submitted_sms_pmt = pd.DataFrame({
-            'Cell': sns_dedup2['cell'],
-            'Name': sns_dedup2['client_name'],
-            'ID NUMBER': sns_dedup2['id_number'].astype(str),
-            'Stage': sns_dedup2['payment_stage'],
-            'Amount': sns_dedup2['amount'],
-            'Status': sns_dedup2['status']
+            'Cell': sale_not_submitted_dedup['cell'],
+            'Name': sale_not_submitted_dedup['client_name'],
+            'ID NUMBER': sale_not_submitted_dedup['id_number'].astype(str),
+            'Stage': sale_not_submitted_dedup['payment_stage'],
+            'Amount': sale_not_submitted_dedup['amount'],
+            'Status': sale_not_submitted_dedup['status']
         })
     else:
         sale_not_submitted_sms_pmt = pd.DataFrame(
             columns=['Cell', 'Name', 'ID NUMBER', 'Stage', 'Amount', 'Status'])
 
-    # Client Cancelled Mandate → append to Failed SMS list
     if not cancelled_mandate_mtd_df.empty:
         cm_dedup2 = cancelled_mandate_mtd_df.groupby('id_number').agg({
             'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
@@ -1137,7 +1147,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     }
 
 # ================================================================
-# ---- Helper function to send SMS ----
+# ---- Send SMS helper ----
 # ================================================================
 def send_sms(to_number, message, provider_type="generic"):
     try:
@@ -1160,7 +1170,7 @@ def send_sms(to_number, message, provider_type="generic"):
         return False, str(e)
 
 # ================================================================
-# ---- Detect sheets and handle selection ----
+# ---- Detect sheets ----
 # ================================================================
 with st.spinner("⏳ Reading file structure..."):
     xls = pd.ExcelFile(fee_content)
@@ -1300,6 +1310,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# ---- KPI Row 1 ----
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.markdown(f"""
@@ -1347,6 +1358,7 @@ with col4:
     </div>
     """, unsafe_allow_html=True)
 
+# ---- KPI Row 2 ----
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.markdown(f"""
@@ -1381,6 +1393,7 @@ with col4:
     </div>
     """, unsafe_allow_html=True)
 
+# ---- In Progress ----
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">🔄 In Progress (Stage 1/2)</h3>
@@ -1421,6 +1434,7 @@ with col4:
     </div>
     """, unsafe_allow_html=True)
 
+# ---- Independent Statuses ----
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">📌 Independent Statuses (not counted as failures)</h3>
@@ -1439,7 +1453,7 @@ with col1:
 with col2:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #6c757d;">
-        <div class="metric-label">📭 Sale Not Submitted</div>
+        <div class="metric-label">📭 Sale Not Submitted (Current Month)</div>
         <div class="metric-value">R {sale_not_submitted_v:,.2f}</div>
         <div class="metric-delta">{sale_not_submitted_c} clients</div>
     </div>
@@ -1453,6 +1467,7 @@ with col3:
     </div>
     """, unsafe_allow_html=True)
 
+# ---- Upcoming Debits ----
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">📅 Upcoming Debits (Stage 1/2)</h3>
@@ -1504,6 +1519,7 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
+# ---- Charts ----
 st.subheader("📊 Visual Analytics")
 
 col1, col2 = st.columns(2)
@@ -1553,6 +1569,7 @@ with col2:
             st.info("No priority data available.")
         st.markdown('</div>', unsafe_allow_html=True)
 
+# ---- Historical Trends ----
 history_file = "history/metrics_history.csv"
 os.makedirs(os.path.dirname(history_file), exist_ok=True)
 
@@ -1633,6 +1650,9 @@ if os.path.exists(history_file):
     except:
         pass
 
+# ================================================================
+# ---- SMS SENDING ----
+# ================================================================
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">📱 Send SMS Messages</h3>
@@ -1720,14 +1740,18 @@ if not tracking_sms.empty:
 else:
     st.info("No intracking clients.")
 
+# ================================================================
+# 📭 SALE NOT SUBMITTED
+# ================================================================
 st.markdown("""
 <div style="margin-top: 32px; margin-bottom: 16px;">
-    <h3 style="font-weight: 600; color: #1e1e2d;">📭 Sale Not Submitted — Send to Sales Department</h3>
-    <p style="color: #6c757d; font-size: 14px;">Source: Fee Audit. No SMS is sent to these clients.</p>
+    <h3 style="font-weight: 600; color: #1e1e2d;">📭 Sale Not Submitted — Current Month</h3>
+    <p style="color: #6c757d; font-size: 14px;">All sales with this status in the current month's Fee Audit. No SMS is sent to these clients.</p>
 </div>
 """, unsafe_allow_html=True)
 
 if not sale_not_submitted_sms.empty:
+    st.markdown(f"**Total clients this month: {len(sale_not_submitted_sms)}** · **Total value: R {sale_not_submitted_sms['Amount'].sum():,.2f}**")
     st.dataframe(sale_not_submitted_sms, width='stretch')
     csv_sns = sale_not_submitted_sms.to_csv(index=False).encode('utf-8')
     st.download_button(
@@ -1737,8 +1761,9 @@ if not sale_not_submitted_sms.empty:
         mime="text/csv"
     )
 else:
-    st.info("No clients with 'Sale Not Submitted' status in the Fee Audit for the current period.")
+    st.info("No clients with 'Sale Not Submitted' status in the current month's Fee Audit.")
 
+# ---- CSV downloads ----
 st.markdown("---")
 st.subheader("📥 Export SMS Lists (CSV)")
 col1, col2 = st.columns(2)
@@ -1755,6 +1780,7 @@ with col2:
     else:
         st.info("No intracking clients to export.")
 
+# ---- Priority Queue ----
 st.subheader("🔴 Priority Queue")
 if not combined_priority.empty:
     def color_priority(val):
@@ -1769,6 +1795,7 @@ if not combined_priority.empty:
 else:
     st.info("No clients in the priority queue.")
 
+# ---- Data Preview ----
 with st.expander("🔍 Data Preview (Debugging)"):
     st.subheader("Summary")
     st.write(f"**Total rows after merge:** {len(raw)}")
@@ -1806,6 +1833,15 @@ with st.expander("🔍 Data Preview (Debugging)"):
         status_counts.columns = ['Status', 'Count']
         st.dataframe(status_counts, width='stretch')
 
+    st.subheader("Sale Not Submitted — Fee Audit rows")
+    sns_rows = fee_base[fee_base['status'].astype(str).str.upper().str.contains('SALE NOT SUBMITTED', na=False)]
+    if not sns_rows.empty:
+        st.write(f"**Total rows:** {len(sns_rows)}")
+        st.dataframe(sns_rows.head(20), width='stretch')
+    else:
+        st.info("No Sale Not Submitted rows found in the Fee Audit.")
+
+# ---- Download full Excel report ----
 st.subheader("📥 Download Full Excel Report")
 
 def generate_excel():
@@ -1856,7 +1892,6 @@ def generate_excel():
         failed_clients.to_excel(writer, sheet_name='Failed Clients', index=False)
         writer.sheets['Failed Clients'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
 
-        # Failed SMS sheet — column order: Cell, Name, ID NUMBER, Stage, Amount, Status
         if not failed_sms.empty:
             failed_sms_out = failed_sms[['Cell', 'Name', 'ID NUMBER', 'Stage', 'Amount', 'Status']]
         else:
@@ -1864,7 +1899,6 @@ def generate_excel():
         failed_sms_out.to_excel(writer, sheet_name='Failed Clients (SMS)', index=False)
         writer.sheets['Failed Clients (SMS)'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
 
-        # Intracking SMS sheet — column order: Cell, Name, ID NUMBER, Stage, Amount, Status
         if not tracking_sms.empty:
             tracking_sms_out = tracking_sms[['Cell', 'Name', 'ID NUMBER', 'Stage', 'Amount', 'Status']]
         else:
