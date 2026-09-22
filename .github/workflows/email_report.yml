@@ -34,7 +34,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Send email
-        run: python send_email.py
+        run: python send_email_report.py
         env:
           SMTP_SERVER:   ${{ secrets.SMTP_SERVER }}
           SMTP_PORT:     ${{ secrets.SMTP_PORT }}
