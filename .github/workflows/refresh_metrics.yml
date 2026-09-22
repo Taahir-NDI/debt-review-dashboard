@@ -1,25 +1,12 @@
-name: Send Email
+name: Refresh Metrics
 
 on:
-  workflow_run:
-    workflows: ["Refresh Metrics"]   # must match name: in refresh_metrics.yml exactly
-    types: [completed]
-
-  workflow_dispatch:                 # optional: lets you test the email workflow manually
+  workflow_dispatch:        # ← REQUIRED: enables manual trigger
+  schedule:
+    - cron: '0 6 * * *'    # optional: keep or remove
 
 jobs:
-  send-email:
-    # Runs automatically ONLY when the Refresh Metrics workflow
-    # was triggered manually AND finished successfully.
-    # The extra github.event_name check allows manual test runs of this workflow.
-    if: >
-      ${{
-        github.event_name == 'workflow_dispatch' ||
-        (
-          github.event.workflow_run.event == 'workflow_dispatch' &&
-          github.event.workflow_run.conclusion == 'success'
-        )
-      }}
+  refresh:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -33,13 +20,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Send email
-        run: python send_email.py
+      - name: Run refresh metrics
+        run: python refresh_metrics.py
         env:
-          SMTP_SERVER:   ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT:     ${{ secrets.SMTP_PORT }}
-          SMTP_USER:     ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          EMAIL_FROM:    ${{ secrets.EMAIL_FROM }}
-          EMAIL_TO:      ${{ secrets.EMAIL_TO }}
-          # ... add any other env vars your email script needs
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          # ... any other env vars your refresh script needs
