@@ -1,301 +1,373 @@
-# ================================================================
-# 📧 SEND EMAIL VIA SENDGRID — with Excel attachments + second SMS email
-# ================================================================
+#!/usr/bin/env python3
+"""
+send_email_report.py
+
+Sends the latest Debt Review report via SMTP (SendGrid compatible),
+with a rich HTML body pulled from the 'Dashboard' sheet of the attached Excel.
+
+Environment variables:
+    SMTP_SERVER    e.g. smtp.sendgrid.net
+    SMTP_PORT      e.g. 587
+    SMTP_USER      e.g. apikey
+    SMTP_PASSWORD  SendGrid API key (starts with SG.)
+    EMAIL_FROM     Verified sender in SendGrid
+    EMAIL_TO       Comma-separated recipients
+"""
 
 import os
-import io
-import base64
+import sys
+import glob
+import smtplib
+import ssl
+from email.message import EmailMessage
 from datetime import datetime
-import requests
+
 import pandas as pd
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
 
-# ---- Configuration ----
-SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
-FROM_EMAIL = os.getenv("FROM_EMAIL", "taahirnationaldebt@gmail.com")
-TO_EMAIL = os.getenv("TO_EMAIL")
-TO_EMAIL_SMS = os.getenv("TO_EMAIL_SMS")
-DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://your-dashboard.streamlit.app")
-FOLDER_ID = os.getenv("FOLDER_ID")
 
-DEFAULT_METRICS = {
-    "settled_mtd_v": 0, "failed_mtd_v": 0, "success_rate": 0,
-    "revenue_total": 0, "current_debits_v": 0, "next_debits_v": 0,
-    "tracking_c": 0, "failed_cycle_c": 0,
-}
+# ------------------------------------------------------------------
+# 1. Read env vars
+# ------------------------------------------------------------------
+def env(name, default=""):
+    val = os.getenv(name)
+    return val if val not in (None, "") else default
 
-# ---- Google Drive ----
-def get_drive_service():
-    creds_info = {
-        "type": "service_account",
-        "project_id": os.getenv("PROJECT_ID"),
-        "private_key_id": os.getenv("PRIVATE_KEY_ID"),
-        "private_key": os.getenv("PRIVATE_KEY").replace("\\n", "\n"),
-        "client_email": os.getenv("CLIENT_EMAIL"),
-        "client_id": os.getenv("CLIENT_ID"),
-        "auth_uri": os.getenv("AUTH_URI", "https://accounts.google.com/o/oauth2/auth"),
-        "token_uri": os.getenv("TOKEN_URI", "https://oauth2.googleapis.com/token"),
-        "auth_provider_x509_cert_url": os.getenv("AUTH_PROVIDER_X509_CERT_URL", "https://www.googleapis.com/oauth2/v1/certs"),
-        "client_x509_cert_url": os.getenv("CLIENT_X509_CERT_URL"),
-    }
-    creds = service_account.Credentials.from_service_account_info(creds_info)
-    return build("drive", "v3", credentials=creds)
 
-def download_from_drive(file_name):
-    service = get_drive_service()
-    query = f"'{FOLDER_ID}' in parents and name = '{file_name}' and trashed = false"
-    results = service.files().list(q=query, fields="files(id, name)").execute()
-    files = results.get("files", [])
-    if not files:
-        raise Exception(f"{file_name} not found on Google Drive.")
-    request = service.files().get_media(fileId=files[0]["id"])
-    fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    fh.seek(0)
-    return fh
+SMTP_SERVER   = env("SMTP_SERVER", "smtp.sendgrid.net")
+SMTP_PORT_RAW = env("SMTP_PORT", "587")
+SMTP_USER     = env("SMTP_USER")
+SMTP_PASSWORD = env("SMTP_PASSWORD")
+EMAIL_FROM    = env("EMAIL_FROM", SMTP_USER)
+EMAIL_TO      = env("EMAIL_TO")
 
-def get_metrics():
+print("=" * 60)
+print("SMTP configuration")
+print("=" * 60)
+print(f"  SMTP_SERVER   : {SMTP_SERVER!r}")
+print(f"  SMTP_PORT     : {SMTP_PORT_RAW!r}")
+print(f"  SMTP_USER     : {SMTP_USER!r}")
+print(f"  SMTP_PASSWORD : {'*' * len(SMTP_PASSWORD) if SMTP_PASSWORD else '(empty)'}")
+print(f"  EMAIL_FROM    : {EMAIL_FROM!r}")
+print(f"  EMAIL_TO      : {EMAIL_TO!r}")
+print("=" * 60)
+
+missing = [n for n, v in [
+    ("SMTP_SERVER", SMTP_SERVER),
+    ("SMTP_PORT", SMTP_PORT_RAW),
+    ("SMTP_USER", SMTP_USER),
+    ("SMTP_PASSWORD", SMTP_PASSWORD),
+    ("EMAIL_FROM", EMAIL_FROM),
+    ("EMAIL_TO", EMAIL_TO),
+] if not v]
+
+if missing:
+    print(f"❌ Missing required configuration: {', '.join(missing)}")
+    sys.exit(1)
+
+try:
+    SMTP_PORT = int(SMTP_PORT_RAW)
+except ValueError:
+    print(f"❌ SMTP_PORT must be an integer, got {SMTP_PORT_RAW!r}")
+    sys.exit(1)
+
+recipients = [a.strip() for a in EMAIL_TO.split(",") if a.strip()]
+if not recipients:
+    print("❌ EMAIL_TO contained no valid addresses.")
+    sys.exit(1)
+
+
+# ------------------------------------------------------------------
+# 2. Find latest report
+# ------------------------------------------------------------------
+def find_report():
+    for pat in ["Debt_Review_Dashboard_*.xlsx", "*.xlsx",
+                "reports/*.xlsx", "history/*.xlsx"]:
+        found = glob.glob(pat)
+        if found:
+            found.sort(key=os.path.getmtime, reverse=True)
+            return found[0]
+    return None
+
+
+report_path = find_report()
+print(f"📎 Report: {report_path or '(none)'}")
+
+
+# ------------------------------------------------------------------
+# 3. Extract metrics from the Dashboard sheet
+# ------------------------------------------------------------------
+def load_metrics(path):
+    """Return list of (metric_name, value_string) tuples from the Dashboard sheet."""
+    if not path:
+        return []
     try:
-        fh = download_from_drive("metrics_history.csv")
-        df = pd.read_csv(fh)
-        if len(df) > 0:
-            latest = df.sort_values("report_date").iloc[-1]
-            return {
-                "settled_mtd_v": float(latest.get("settled_mtd_v", 0) or 0),
-                "failed_mtd_v": float(latest.get("failed_mtd_v", 0) or 0),
-                "success_rate": float(latest.get("success_rate", 0) or 0),
-                "revenue_total": float(latest.get("revenue_total", 0) or 0),
-                "current_debits_v": float(latest.get("current_debits_v", 0) or 0),
-                "next_debits_v": float(latest.get("next_debits_v", 0) or 0),
-                "tracking_c": float(latest.get("tracking_c", 0) or 0),
-                "failed_cycle_c": float(latest.get("failed_cycle_c", 0) or 0),
-            }
+        df = pd.read_excel(path, sheet_name="Dashboard")
     except Exception as e:
-        print(f"⚠️ Could not read metrics from Drive: {e}")
-    return DEFAULT_METRICS
+        print(f"⚠️  Could not read Dashboard sheet: {e}")
+        return []
 
-# ---- HTML body (main email) ----
-def create_html_body(metrics):
-    today = datetime.now().strftime("%d %B %Y")
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <style>
-            body {{ font-family: Arial, sans-serif; background-color: #f8f9fa; padding: 20px; }}
-            .container {{ max-width: 600px; margin: 0 auto; background: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-            .header {{ border-bottom: 2px solid #4e8cff; padding-bottom: 15px; margin-bottom: 20px; }}
-            h1 {{ color: #1e1e2d; font-size: 24px; margin: 0; }}
-            .subtitle {{ color: #6c757d; font-size: 14px; }}
-            .metric-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0; }}
-            .metric-card {{ background: #f8f9fa; border-radius: 8px; padding: 15px; border-left: 4px solid #4e8cff; }}
-            .metric-label {{ font-size: 12px; color: #8a8a8a; text-transform: uppercase; letter-spacing: 0.3px; }}
-            .metric-value {{ font-size: 22px; font-weight: 700; color: #1e1e2d; }}
-            .metric-delta {{ font-size: 13px; color: #6c757d; }}
-            .btn {{ display: inline-block; background: #4e8cff; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; margin-top: 10px; }}
-            .footer {{ margin-top: 30px; padding-top: 15px; border-top: 1px solid #dee2e6; font-size: 12px; color: #6c757d; text-align: center; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>📊 Debt Review Dashboard Report</h1>
-                <div class="subtitle">Report generated on {today}</div>
-            </div>
-            <div class="metric-grid">
-                <div class="metric-card" style="border-left-color: #28a745;">
-                    <div class="metric-label">💰 Revenue (Period)</div>
-                    <div class="metric-value">R {metrics['revenue_total']:,.2f}</div>
-                </div>
-                <div class="metric-card" style="border-left-color: #6f42c1;">
-                    <div class="metric-label">🎯 Success Rate</div>
-                    <div class="metric-value">{metrics['success_rate']:.1f}%</div>
-                </div>
-                <div class="metric-card" style="border-left-color: #17a2b8;">
-                    <div class="metric-label">✅ Settled Amount</div>
-                    <div class="metric-value">R {metrics['settled_mtd_v']:,.2f}</div>
-                </div>
-                <div class="metric-card" style="border-left-color: #dc3545;">
-                    <div class="metric-label">❌ Failed Amount</div>
-                    <div class="metric-value">R {metrics['failed_mtd_v']:,.2f}</div>
-                </div>
-                <div class="metric-card" style="border-left-color: #ff9f43;">
-                    <div class="metric-label">📅 Current Month Debits</div>
-                    <div class="metric-value">R {metrics['current_debits_v']:,.2f}</div>
-                    <div class="metric-delta">Next Month: R {metrics['next_debits_v']:,.2f}</div>
-                </div>
-                <div class="metric-card" style="border-left-color: #20c997;">
-                    <div class="metric-label">👥 Intracking Clients</div>
-                    <div class="metric-value">{metrics['tracking_c']:.0f} clients</div>
-                    <div class="metric-delta">Failed: {metrics['failed_cycle_c']:.0f}</div>
-                </div>
-            </div>
-            <div style="text-align: center; margin-top: 15px;">
-                <a href="{DASHBOARD_URL}" class="btn">View Full Dashboard →</a>
-            </div>
-            <div class="footer">
-                Automated report from Debt Review Dashboard · Data refreshed from Google Drive<br>
-                📎 Full Excel report attached.
-            </div>
-        </div>
-    </body>
-    </html>
-    """
+    # The Dashboard sheet has two columns: 'Metric' and 'Value'
+    if df.shape[1] < 2:
+        return []
 
-# ---- HTML body for the SMS-only email ----
-def create_sms_email_body():
-    today = datetime.now().strftime("%d %B %Y")
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <style>
-            body {{ font-family: Arial, sans-serif; background-color: #f8f9fa; padding: 20px; }}
-            .container {{ max-width: 600px; margin: 0 auto; background: white; border-radius: 12px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-            .header {{ border-bottom: 2px solid #dc3545; padding-bottom: 15px; margin-bottom: 20px; }}
-            h1 {{ color: #1e1e2d; font-size: 22px; margin: 0; }}
-            .subtitle {{ color: #6c757d; font-size: 14px; }}
-            .note {{ background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px 16px; border-radius: 6px; margin: 20px 0; font-size: 14px; color: #664d03; }}
-            .footer {{ margin-top: 30px; padding-top: 15px; border-top: 1px solid #dee2e6; font-size: 12px; color: #6c757d; text-align: center; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>📱 SMS Lists — Failed &amp; Intracking</h1>
-                <div class="subtitle">Generated on {today}</div>
-            </div>
-            <div class="note">
-                The following files are attached for the SMS team:
-                <ul>
-                    <li><strong>Failed_SMS.xlsx</strong> — clients with failed, disputed, or cancelled mandate payments</li>
-                    <li><strong>Intracking_SMS.xlsx</strong> — clients still being tracked</li>
-                </ul>
-            </div>
-            <div class="footer">Automated SMS lists from Debt Review Dashboard</div>
-        </div>
-    </body>
-    </html>
-    """
+    metrics = []
+    for _, row in df.iterrows():
+        name  = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+        value = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
+        if name and name.lower() != "nan":
+            metrics.append((name, value))
+    return metrics
 
-# ---- Send main email ----
-def send_email():
-    if not SENDGRID_API_KEY:
-        print("❌ SENDGRID_API_KEY not set")
-        return False
-    if not TO_EMAIL:
-        print("❌ TO_EMAIL not set")
-        return False
 
-    metrics = get_metrics()
-    html_body = create_html_body(metrics)
-    today = datetime.now().strftime("%d %b %Y")
+def metrics_to_dict(metrics):
+    return {name: value for name, value in metrics}
 
-    attachments = []
+
+metrics     = load_metrics(report_path)
+metrics_map = metrics_to_dict(metrics)
+
+
+# ------------------------------------------------------------------
+# 4. Build highlights
+# ------------------------------------------------------------------
+def parse_amount(value):
+    """Extract a numeric R amount from a string like '12 | R14,500.00' → 14500.0."""
+    if not value:
+        return 0.0
     try:
-        xlsx_fh = download_from_drive("Debt_Review_Report.xlsx")
-        xlsx_bytes = xlsx_fh.read()
-        xlsx_b64 = base64.b64encode(xlsx_bytes).decode("utf-8")
-        attachments.append({
-            "content": xlsx_b64,
-            "type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "filename": f"Debt_Review_Report_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            "disposition": "attachment",
-        })
-        print(f"📎 Attached full report ({len(xlsx_bytes) / 1024:.1f} KB)")
-    except Exception as e:
-        print(f"⚠️ Could not attach full Excel report: {e}")
+        chunk = value.split("|")[-1].replace("R", "").replace(",", "").strip()
+        return float(chunk) if chunk else 0.0
+    except Exception:
+        return 0.0
 
-    payload = {
-        "personalizations": [{"to": [{"email": TO_EMAIL}]}],
-        "from": {"email": FROM_EMAIL},
-        "subject": f"📊 Debt Review Report - {today}",
-        "content": [{"type": "text/html", "value": html_body}],
-    }
-    if attachments:
-        payload["attachments"] = attachments
 
-    headers = {
-        "Authorization": f"Bearer {SENDGRID_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    print(f"🔍 Sending main email to: {TO_EMAIL}")
+def parse_count(value):
+    """Extract the leading count from '12 | R14,500.00' → 12."""
+    if not value:
+        return 0
     try:
-        response = requests.post("https://api.sendgrid.com/v3/mail/send", json=payload, headers=headers)
-        if response.status_code == 202:
-            print(f"✅ Main email sent to {TO_EMAIL}")
-        else:
-            print(f"❌ SendGrid error: {response.status_code} - {response.text}")
-    except Exception as e:
-        print(f"❌ Main email failed: {e}")
+        return int(value.split("|")[0].strip())
+    except Exception:
+        return 0
 
-    return True
 
-# ---- Send SMS-only email ----
-def send_sms_email():
-    if not SENDGRID_API_KEY:
-        print("❌ SENDGRID_API_KEY not set — skipping SMS email")
-        return False
-    if not TO_EMAIL_SMS:
-        print("⚠️ TO_EMAIL_SMS not set — skipping SMS email")
-        return False
+highlights = []
 
-    today = datetime.now().strftime("%d %b %Y")
-    html_body = create_sms_email_body()
+# Total due this period
+due_count = parse_count(metrics_map.get("Curr Month Debits (Stage 1/2)", ""))
+due_value = parse_amount(metrics_map.get("Curr Month Debits (Stage 1/2)", ""))
+if due_count:
+    highlights.append(("📅", "Clients Due This Period",
+                       f"{due_count} clients · R {due_value:,.2f}"))
 
-    attachments = []
-    for drive_name, local_name in [
-        ("Failed_SMS.xlsx", "Failed_SMS"),
-        ("Intracking_SMS.xlsx", "Intracking_SMS"),
-    ]:
-        try:
-            fh = download_from_drive(drive_name)
-            b = fh.read()
-            b64 = base64.b64encode(b).decode("utf-8")
-            attachments.append({
-                "content": b64,
-                "type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "filename": f"{local_name}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                "disposition": "attachment",
-            })
-            print(f"📎 Attached {drive_name} ({len(b) / 1024:.1f} KB)")
-        except Exception as e:
-            print(f"⚠️ Could not attach {drive_name}: {e}")
+# Settled
+settled_count = parse_count(metrics_map.get("Settled Period (Stage 1/2)", ""))
+settled_value = parse_amount(metrics_map.get("Settled Period (Stage 1/2)", ""))
+if settled_count:
+    highlights.append(("✅", "Settled",
+                       f"{settled_count} clients · R {settled_value:,.2f}"))
 
-    if not attachments:
-        print("⚠️ No SMS attachments found — skipping SMS email")
-        return False
+# Failed
+failed_count = parse_count(metrics_map.get("Failed Period (Stage 1/2)", ""))
+failed_value = parse_amount(metrics_map.get("Failed Period (Stage 1/2)", ""))
+if failed_count:
+    highlights.append(("❌", "Failed",
+                       f"{failed_count} clients · R {failed_value:,.2f}"))
 
-    payload = {
-        "personalizations": [{"to": [{"email": TO_EMAIL_SMS}]}],
-        "from": {"email": FROM_EMAIL},
-        "subject": f"📱 SMS Lists (Failed & Intracking) - {today}",
-        "content": [{"type": "text/html", "value": html_body}],
-        "attachments": attachments,
-    }
-    headers = {
-        "Authorization": f"Bearer {SENDGRID_API_KEY}",
-        "Content-Type": "application/json",
-    }
+# Disputed
+disp_count = parse_count(metrics_map.get("Disputed (Stage 1/2)", ""))
+disp_value = parse_amount(metrics_map.get("Disputed (Stage 1/2)", ""))
+if disp_count:
+    highlights.append(("⚠️", "Disputed",
+                       f"{disp_count} clients · R {disp_value:,.2f}"))
 
-    print(f"🔍 Sending SMS email to: {TO_EMAIL_SMS}")
+# Cancelled mandate
+cm_count = parse_count(metrics_map.get("Client Cancelled Mandate (Stage 1/2)", ""))
+cm_value = parse_amount(metrics_map.get("Client Cancelled Mandate (Stage 1/2)", ""))
+if cm_count:
+    highlights.append(("🚫", "Client Cancelled Mandate",
+                       f"{cm_count} clients · R {cm_value:,.2f}"))
+
+# Sale Not Submitted
+sns_count = parse_count(metrics_map.get("Sale Not Submitted (Stage 1/2)", ""))
+sns_value = parse_amount(metrics_map.get("Sale Not Submitted (Stage 1/2)", ""))
+if sns_count:
+    highlights.append(("📭", "Sale Not Submitted",
+                       f"{sns_count} clients · R {sns_value:,.2f}"))
+
+# Revenue
+revenue_value = metrics_map.get("Revenue Total (Stage 1/2, Period)", "")
+if revenue_value:
+    highlights.append(("💰", "Revenue", revenue_value))
+
+# Success rate
+success_rate = metrics_map.get(
+    "Success Rate (Period, by value, Disputed = Failure)", "")
+if success_rate:
+    highlights.append(("🎯", "Success Rate", success_rate))
+
+
+# ------------------------------------------------------------------
+# 5. Render HTML
+# ------------------------------------------------------------------
+def html_body(metrics, highlights):
+    today_str = datetime.now().strftime("%d %B %Y")
+
+    # Highlights table
+    hl_rows = ""
+    for icon, label, value in highlights:
+        hl_rows += (
+            f"<tr>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #eee;'>{icon}</td>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #eee;'>"
+            f"<strong>{label}</strong></td>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #eee;"
+            f"text-align:right;'>{value}</td>"
+            f"</tr>"
+        )
+
+    # Full dashboard table
+    full_rows = ""
+    for name, value in metrics:
+        full_rows += (
+            f"<tr>"
+            f"<td style='padding:6px 12px;border-bottom:1px solid #f0f0f0;"
+            f"color:#555;'>{name}</td>"
+            f"<td style='padding:6px 12px;border-bottom:1px solid #f0f0f0;"
+            f"text-align:right;'>{value}</td>"
+            f"</tr>"
+        )
+
+    return f"""\
+<html>
+<body style="margin:0;padding:0;background:#f5f6f8;font-family:Arial,sans-serif;
+             color:#1e1e2d;">
+  <div style="max-width:640px;margin:0 auto;padding:24px 12px;">
+
+    <div style="background:#ffffff;border-radius:12px;padding:24px;
+                box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+
+      <h2 style="margin:0 0 4px 0;font-size:22px;color:#1e1e2d;">
+        📊 Debt Review Dashboard
+      </h2>
+      <p style="margin:0 0 20px 0;color:#6c757d;font-size:14px;">
+        Report generated {today_str}
+      </p>
+
+      <h3 style="font-size:16px;color:#1e1e2d;margin:0 0 8px 0;">
+        Key Highlights
+      </h3>
+      <table style="width:100%;border-collapse:collapse;font-size:14px;">
+        {hl_rows if hl_rows else "<tr><td>No highlights available.</td></tr>"}
+      </table>
+
+      <h3 style="font-size:16px;color:#1e1e2d;margin:24px 0 8px 0;">
+        Full Metrics
+      </h3>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        {full_rows if full_rows else "<tr><td>No metrics available.</td></tr>"}
+      </table>
+
+      <p style="margin:24px 0 0 0;font-size:14px;color:#555;">
+        📎 The full Excel report is attached.
+      </p>
+
+      <hr style="border:none;border-top:1px solid #eee;margin:24px 0 12px 0;">
+      <p style="margin:0;font-size:12px;color:#999;">
+        Sent automatically by the Debt Review Dashboard workflow.
+      </p>
+    </div>
+
+  </div>
+</body>
+</html>
+"""
+
+
+# ------------------------------------------------------------------
+# 6. Render plain-text fallback
+# ------------------------------------------------------------------
+def text_body(metrics, highlights):
+    today_str = datetime.now().strftime("%d %B %Y")
+    lines = [f"Debt Review Dashboard — {today_str}", "", "Key Highlights:"]
+    for icon, label, value in highlights:
+        lines.append(f"  {icon} {label}: {value}")
+    lines.append("")
+    lines.append("Full Metrics:")
+    for name, value in metrics:
+        lines.append(f"  {name}: {value}")
+    lines.append("")
+    lines.append("The full Excel report is attached.")
+    lines.append("")
+    lines.append("Sent automatically by the Debt Review Dashboard workflow.")
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------
+# 7. Compose email
+# ------------------------------------------------------------------
+today_str = datetime.now().strftime("%d %B %Y")
+
+msg = EmailMessage()
+msg["Subject"] = f"Debt Review Report — {today_str}"
+msg["From"]    = EMAIL_FROM
+msg["To"]      = ", ".join(recipients)
+
+# Plain text first, then HTML (multipart/alternative)
+msg.set_content(text_body(metrics, highlights))
+msg.add_alternative(html_body(metrics, highlights), subtype="html")
+
+# Attach the Excel file
+if report_path:
     try:
-        response = requests.post("https://api.sendgrid.com/v3/mail/send", json=payload, headers=headers)
-        if response.status_code == 202:
-            print(f"✅ SMS email sent to {TO_EMAIL_SMS}")
-        else:
-            print(f"❌ SendGrid error: {response.status_code} - {response.text}")
+        with open(report_path, "rb") as f:
+            data = f.read()
+        msg.add_attachment(
+            data,
+            maintype="application",
+            subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=os.path.basename(report_path),
+        )
+        print(f"   attached: {os.path.basename(report_path)} ({len(data):,} bytes)")
     except Exception as e:
-        print(f"❌ SMS email failed: {e}")
+        print(f"⚠️  Could not attach {report_path}: {e}")
 
-    return True
 
-if __name__ == "__main__":
-    send_email()
-    send_sms_email()
+# ------------------------------------------------------------------
+# 8. Send
+# ------------------------------------------------------------------
+def send_via_ssl():
+    ctx = ssl.create_default_context()
+    with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=ctx, timeout=30) as s:
+        s.login(SMTP_USER, SMTP_PASSWORD)
+        s.send_message(msg)
+
+
+def send_via_starttls():
+    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30) as s:
+        s.ehlo()
+        s.starttls(context=ssl.create_default_context())
+        s.ehlo()
+        s.login(SMTP_USER, SMTP_PASSWORD)
+        s.send_message(msg)
+
+
+try:
+    print(f"📧 Connecting to {SMTP_SERVER}:{SMTP_PORT} …")
+    if SMTP_PORT == 465:
+        send_via_ssl()
+    else:
+        send_via_starttls()
+    print(f"✅ Email sent successfully to: {', '.join(recipients)}")
+except smtplib.SMTPAuthenticationError as e:
+    print(f"❌ SMTP authentication failed: {e}")
+    sys.exit(1)
+except smtplib.SMTPServerDisconnected as e:
+    print(f"❌ Server disconnected: {e}")
+    sys.exit(1)
+except smtplib.SMTPException as e:
+    print(f"❌ SMTP error: {e}")
+    sys.exit(1)
+except Exception as e:
+    print(f"❌ Unexpected error: {e!r}")
+    sys.exit(1)
