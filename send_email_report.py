@@ -2,21 +2,22 @@
 """
 send_email_report.py
 
-Sends the latest Debt Review report via SMTP (SendGrid compatible),
-with a rich HTML body pulled from the 'Dashboard' sheet of the attached Excel.
+Sends three emails via SMTP (SendGrid compatible):
 
-Environment variables:
-    SMTP_SERVER    e.g. smtp.sendgrid.net
-    SMTP_PORT      e.g. 587
-    SMTP_USER      e.g. apikey
-    SMTP_PASSWORD  SendGrid API key (starts with SG.)
-    EMAIL_FROM     Verified sender in SendGrid
-    EMAIL_TO       Comma-separated recipients
+  1. Full Debt Review report (HTML summary + Excel attachment)
+        → EMAIL_TO        (default: taahir@nationaldebt.org.za)
+  2. Failed Clients list (Excel attachment)
+        → TO_EMAIL_SMS    (default: reece@nationaldebt.org.za)
+  3. Intracking Clients list (Excel attachment)
+        → TO_EMAIL_SMS    (default: reece@nationaldebt.org.za)
+
+Sale Not Submitted stays inside the main Excel report as a tab.
 """
 
 import os
 import sys
 import glob
+import io
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -26,7 +27,7 @@ import pandas as pd
 
 
 # ------------------------------------------------------------------
-# 1. Read env vars
+# 1. Env helpers
 # ------------------------------------------------------------------
 def env(name, default=""):
     val = os.getenv(name)
@@ -35,31 +36,42 @@ def env(name, default=""):
 
 SMTP_SERVER   = env("SMTP_SERVER", "smtp.sendgrid.net")
 SMTP_PORT_RAW = env("SMTP_PORT", "587")
-SMTP_USER     = env("SMTP_USER")
+SMTP_USER     = env("SMTP_USER", "apikey")
 SMTP_PASSWORD = env("SMTP_PASSWORD")
 EMAIL_FROM    = env("EMAIL_FROM", SMTP_USER)
-EMAIL_TO      = env("EMAIL_TO")
 
-print("=" * 60)
-print("SMTP configuration")
-print("=" * 60)
-print(f"  SMTP_SERVER   : {SMTP_SERVER!r}")
-print(f"  SMTP_PORT     : {SMTP_PORT_RAW!r}")
-print(f"  SMTP_USER     : {SMTP_USER!r}")
-print(f"  SMTP_PASSWORD : {'*' * len(SMTP_PASSWORD) if SMTP_PASSWORD else '(empty)'}")
-print(f"  EMAIL_FROM    : {EMAIL_FROM!r}")
-print(f"  EMAIL_TO      : {EMAIL_TO!r}")
-print("=" * 60)
+# Recipients (fallbacks baked in so this works even if secrets are missing)
+EMAIL_TO_REPORT = env("EMAIL_TO",          "taahir@nationaldebt.org.za")
+EMAIL_TO_SMS    = env("TO_EMAIL_SMS",      "reece@nationaldebt.org.za")
 
-missing = [n for n, v in [
-    ("SMTP_SERVER", SMTP_SERVER),
-    ("SMTP_PORT", SMTP_PORT_RAW),
-    ("SMTP_USER", SMTP_USER),
-    ("SMTP_PASSWORD", SMTP_PASSWORD),
-    ("EMAIL_FROM", EMAIL_FROM),
-    ("EMAIL_TO", EMAIL_TO),
-] if not v]
 
+# ------------------------------------------------------------------
+# 2. Startup diagnostics
+# ------------------------------------------------------------------
+def banner(title):
+    print("=" * 64)
+    print(title)
+    print("=" * 64)
+
+
+banner("SMTP configuration")
+print(f"  SMTP_SERVER     : {SMTP_SERVER!r}")
+print(f"  SMTP_PORT       : {SMTP_PORT_RAW!r}")
+print(f"  SMTP_USER       : {SMTP_USER!r}")
+print(f"  SMTP_PASSWORD   : {'*' * len(SMTP_PASSWORD) if SMTP_PASSWORD else '(empty)'}")
+print(f"  EMAIL_FROM      : {EMAIL_FROM!r}")
+print(f"  EMAIL_TO        : {EMAIL_TO_REPORT!r}   (full report)")
+print(f"  TO_EMAIL_SMS    : {EMAIL_TO_SMS!r}   (failed + intracking)")
+print("=" * 64)
+
+required = {
+    "SMTP_SERVER":   SMTP_SERVER,
+    "SMTP_PORT":     SMTP_PORT_RAW,
+    "SMTP_USER":     SMTP_USER,
+    "SMTP_PASSWORD": SMTP_PASSWORD,
+    "EMAIL_FROM":    EMAIL_FROM,
+}
+missing = [k for k, v in required.items() if not v]
 if missing:
     print(f"❌ Missing required configuration: {', '.join(missing)}")
     sys.exit(1)
@@ -70,295 +82,284 @@ except ValueError:
     print(f"❌ SMTP_PORT must be an integer, got {SMTP_PORT_RAW!r}")
     sys.exit(1)
 
-recipients = [a.strip() for a in EMAIL_TO.split(",") if a.strip()]
-if not recipients:
-    print("❌ EMAIL_TO contained no valid addresses.")
-    sys.exit(1)
-
 
 # ------------------------------------------------------------------
-# 2. Find latest report
+# 3. File discovery
 # ------------------------------------------------------------------
-def find_report():
-    for pat in ["Debt_Review_Dashboard_*.xlsx", "*.xlsx",
-                "reports/*.xlsx", "history/*.xlsx"]:
-        found = glob.glob(pat)
-        if found:
-            found.sort(key=os.path.getmtime, reverse=True)
-            return found[0]
+def find_latest(patterns):
+    """Return the newest file matching any pattern, or None."""
+    for pat in patterns:
+        matches = glob.glob(pat)
+        if matches:
+            matches.sort(key=os.path.getmtime, reverse=True)
+            return matches[0]
     return None
 
 
-report_path = find_report()
-print(f"📎 Report: {report_path or '(none)'}")
+banner("Locating files")
+
+report_path = find_latest([
+    "Debt_Review_Dashboard_*.xlsx",
+    "reports/Debt_Review_Dashboard_*.xlsx",
+    "*.xlsx",
+])
+print(f"  Report          : {report_path}")
+
+failed_path = find_latest([
+    "failed_sms.xlsx", "failed_sms.csv",
+    "failed_clients.xlsx", "failed_clients.csv",
+    "Failed_Clients.xlsx", "Failed_Clients.csv",
+    "*Failed*.xlsx", "*Failed*.csv",
+    "*failed*.xlsx", "*failed*.csv",
+])
+print(f"  Failed list     : {failed_path}")
+
+tracking_path = find_latest([
+    "intracking_sms.xlsx", "intracking_sms.csv",
+    "intracking_clients.xlsx", "intracking_clients.csv",
+    "Intracking_Clients.xlsx", "Intracking_Clients.csv",
+    "*Intracking*.xlsx", "*Intracking*.csv",
+    "*intracking*.xlsx", "*intracking*.csv",
+])
+print(f"  Intracking list : {tracking_path}")
 
 
 # ------------------------------------------------------------------
-# 3. Extract metrics from the Dashboard sheet
+# 4. Excel helpers
 # ------------------------------------------------------------------
-def load_metrics(path):
-    """Return list of (metric_name, value_string) tuples from the Dashboard sheet."""
+def read_any(path):
+    """Read CSV or Excel into a DataFrame."""
+    if not path:
+        return None
+    if path.lower().endswith(".csv"):
+        try:
+            return pd.read_csv(path, encoding="utf-8-sig")
+        except Exception:
+            return pd.read_csv(path, encoding="latin-1")
+    return pd.read_excel(path)
+
+
+def excel_bytes(df, sheet_name="Sheet1"):
+    """Return the DataFrame as an in-memory .xlsx file (bytes)."""
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        df.to_excel(writer, sheet_name=sheet_name, index=False)
+    return buf.getvalue()
+
+
+# ------------------------------------------------------------------
+# 5. Email bodies
+# ------------------------------------------------------------------
+def dashboard_metrics(path):
+    """Return [(metric, value), ...] from the Dashboard sheet."""
     if not path:
         return []
     try:
         df = pd.read_excel(path, sheet_name="Dashboard")
     except Exception as e:
-        print(f"⚠️  Could not read Dashboard sheet: {e}")
+        print(f"⚠️  No Dashboard sheet in {path}: {e}")
         return []
-
-    # The Dashboard sheet has two columns: 'Metric' and 'Value'
-    if df.shape[1] < 2:
-        return []
-
-    metrics = []
+    out = []
     for _, row in df.iterrows():
         name  = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
         value = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
         if name and name.lower() != "nan":
-            metrics.append((name, value))
-    return metrics
+            out.append((name, value))
+    return out
 
 
-def metrics_to_dict(metrics):
-    return {name: value for name, value in metrics}
-
-
-metrics     = load_metrics(report_path)
-metrics_map = metrics_to_dict(metrics)
-
-
-# ------------------------------------------------------------------
-# 4. Build highlights
-# ------------------------------------------------------------------
-def parse_amount(value):
-    """Extract a numeric R amount from a string like '12 | R14,500.00' → 14500.0."""
-    if not value:
-        return 0.0
-    try:
-        chunk = value.split("|")[-1].replace("R", "").replace(",", "").strip()
-        return float(chunk) if chunk else 0.0
-    except Exception:
-        return 0.0
-
-
-def parse_count(value):
-    """Extract the leading count from '12 | R14,500.00' → 12."""
-    if not value:
-        return 0
-    try:
-        return int(value.split("|")[0].strip())
-    except Exception:
-        return 0
-
-
-highlights = []
-
-# Total due this period
-due_count = parse_count(metrics_map.get("Curr Month Debits (Stage 1/2)", ""))
-due_value = parse_amount(metrics_map.get("Curr Month Debits (Stage 1/2)", ""))
-if due_count:
-    highlights.append(("📅", "Clients Due This Period",
-                       f"{due_count} clients · R {due_value:,.2f}"))
-
-# Settled
-settled_count = parse_count(metrics_map.get("Settled Period (Stage 1/2)", ""))
-settled_value = parse_amount(metrics_map.get("Settled Period (Stage 1/2)", ""))
-if settled_count:
-    highlights.append(("✅", "Settled",
-                       f"{settled_count} clients · R {settled_value:,.2f}"))
-
-# Failed
-failed_count = parse_count(metrics_map.get("Failed Period (Stage 1/2)", ""))
-failed_value = parse_amount(metrics_map.get("Failed Period (Stage 1/2)", ""))
-if failed_count:
-    highlights.append(("❌", "Failed",
-                       f"{failed_count} clients · R {failed_value:,.2f}"))
-
-# Disputed
-disp_count = parse_count(metrics_map.get("Disputed (Stage 1/2)", ""))
-disp_value = parse_amount(metrics_map.get("Disputed (Stage 1/2)", ""))
-if disp_count:
-    highlights.append(("⚠️", "Disputed",
-                       f"{disp_count} clients · R {disp_value:,.2f}"))
-
-# Cancelled mandate
-cm_count = parse_count(metrics_map.get("Client Cancelled Mandate (Stage 1/2)", ""))
-cm_value = parse_amount(metrics_map.get("Client Cancelled Mandate (Stage 1/2)", ""))
-if cm_count:
-    highlights.append(("🚫", "Client Cancelled Mandate",
-                       f"{cm_count} clients · R {cm_value:,.2f}"))
-
-# Sale Not Submitted
-sns_count = parse_count(metrics_map.get("Sale Not Submitted (Stage 1/2)", ""))
-sns_value = parse_amount(metrics_map.get("Sale Not Submitted (Stage 1/2)", ""))
-if sns_count:
-    highlights.append(("📭", "Sale Not Submitted",
-                       f"{sns_count} clients · R {sns_value:,.2f}"))
-
-# Revenue
-revenue_value = metrics_map.get("Revenue Total (Stage 1/2, Period)", "")
-if revenue_value:
-    highlights.append(("💰", "Revenue", revenue_value))
-
-# Success rate
-success_rate = metrics_map.get(
-    "Success Rate (Period, by value, Disputed = Failure)", "")
-if success_rate:
-    highlights.append(("🎯", "Success Rate", success_rate))
-
-
-# ------------------------------------------------------------------
-# 5. Render HTML
-# ------------------------------------------------------------------
-def html_body(metrics, highlights):
+def html_report_body(metrics, attached_name):
     today_str = datetime.now().strftime("%d %B %Y")
-
-    # Highlights table
-    hl_rows = ""
-    for icon, label, value in highlights:
-        hl_rows += (
-            f"<tr>"
-            f"<td style='padding:8px 12px;border-bottom:1px solid #eee;'>{icon}</td>"
-            f"<td style='padding:8px 12px;border-bottom:1px solid #eee;'>"
-            f"<strong>{label}</strong></td>"
-            f"<td style='padding:8px 12px;border-bottom:1px solid #eee;"
-            f"text-align:right;'>{value}</td>"
-            f"</tr>"
-        )
-
-    # Full dashboard table
-    full_rows = ""
-    for name, value in metrics:
-        full_rows += (
-            f"<tr>"
-            f"<td style='padding:6px 12px;border-bottom:1px solid #f0f0f0;"
-            f"color:#555;'>{name}</td>"
-            f"<td style='padding:6px 12px;border-bottom:1px solid #f0f0f0;"
-            f"text-align:right;'>{value}</td>"
-            f"</tr>"
-        )
-
+    rows = "".join(
+        f"<tr>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee;color:#555;'>{n}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee;text-align:right;'>{v}</td>"
+        f"</tr>"
+        for n, v in metrics
+    )
     return f"""\
-<html>
-<body style="margin:0;padding:0;background:#f5f6f8;font-family:Arial,sans-serif;
-             color:#1e1e2d;">
-  <div style="max-width:640px;margin:0 auto;padding:24px 12px;">
+<div style="max-width:640px;margin:0 auto;padding:20px 12px;font-family:Arial,Helvetica,sans-serif;color:#1e1e2d;">
+  <h2 style="margin:0 0 4px 0;font-size:22px;">📊 Debt Review Dashboard</h2>
+  <p style="margin:0 0 20px 0;color:#6c757d;font-size:14px;">Report generated {today_str}</p>
 
-    <div style="background:#ffffff;border-radius:12px;padding:24px;
-                box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+  <h3 style="font-size:15px;margin:0 0 8px 0;">Key Metrics</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    {rows if rows else "<tr><td>No metrics found.</td></tr>"}
+  </table>
 
-      <h2 style="margin:0 0 4px 0;font-size:22px;color:#1e1e2d;">
-        📊 Debt Review Dashboard
-      </h2>
-      <p style="margin:0 0 20px 0;color:#6c757d;font-size:14px;">
-        Report generated {today_str}
-      </p>
-
-      <h3 style="font-size:16px;color:#1e1e2d;margin:0 0 8px 0;">
-        Key Highlights
-      </h3>
-      <table style="width:100%;border-collapse:collapse;font-size:14px;">
-        {hl_rows if hl_rows else "<tr><td>No highlights available.</td></tr>"}
-      </table>
-
-      <h3 style="font-size:16px;color:#1e1e2d;margin:24px 0 8px 0;">
-        Full Metrics
-      </h3>
-      <table style="width:100%;border-collapse:collapse;font-size:13px;">
-        {full_rows if full_rows else "<tr><td>No metrics available.</td></tr>"}
-      </table>
-
-      <p style="margin:24px 0 0 0;font-size:14px;color:#555;">
-        📎 The full Excel report is attached.
-      </p>
-
-      <hr style="border:none;border-top:1px solid #eee;margin:24px 0 12px 0;">
-      <p style="margin:0;font-size:12px;color:#999;">
-        Sent automatically by the Debt Review Dashboard workflow.
-      </p>
-    </div>
-
-  </div>
-</body>
-</html>
+  <p style="margin:20px 0 0 0;font-size:13px;color:#555;">
+    📎 Full Excel report attached: <strong>{attached_name}</strong>
+  </p>
+  <hr style="border:none;border-top:1px solid #eee;margin:20px 0 10px 0;">
+  <p style="margin:0;font-size:11px;color:#999;">Sent automatically by the Debt Review Dashboard workflow.</p>
+</div>
 """
 
 
-# ------------------------------------------------------------------
-# 6. Render plain-text fallback
-# ------------------------------------------------------------------
-def text_body(metrics, highlights):
+def text_report_body(metrics, attached_name):
     today_str = datetime.now().strftime("%d %B %Y")
-    lines = [f"Debt Review Dashboard — {today_str}", "", "Key Highlights:"]
-    for icon, label, value in highlights:
-        lines.append(f"  {icon} {label}: {value}")
+    lines = [f"Debt Review Dashboard — {today_str}", "", "Key Metrics:"]
+    for n, v in metrics:
+        lines.append(f"  {n}: {v}")
     lines.append("")
-    lines.append("Full Metrics:")
-    for name, value in metrics:
-        lines.append(f"  {name}: {value}")
-    lines.append("")
-    lines.append("The full Excel report is attached.")
-    lines.append("")
+    lines.append(f"Full Excel report attached: {attached_name}")
     lines.append("Sent automatically by the Debt Review Dashboard workflow.")
     return "\n".join(lines)
 
 
+def simple_html(title, intro, attached_name):
+    return f"""\
+<div style="max-width:640px;margin:0 auto;padding:20px 12px;font-family:Arial,Helvetica,sans-serif;color:#1e1e2d;">
+  <h2 style="margin:0 0 4px 0;font-size:20px;">{title}</h2>
+  <p style="margin:0 0 16px 0;color:#6c757d;font-size:14px;">{intro}</p>
+  <p style="margin:0;font-size:13px;color:#555;">
+    📎 Excel attachment: <strong>{attached_name}</strong>
+  </p>
+  <hr style="border:none;border-top:1px solid #eee;margin:20px 0 10px 0;">
+  <p style="margin:0;font-size:11px;color:#999;">Sent automatically by the Debt Review Dashboard workflow.</p>
+</div>
+"""
+
+
 # ------------------------------------------------------------------
-# 7. Compose email
+# 6. Build the three messages
 # ------------------------------------------------------------------
 today_str = datetime.now().strftime("%d %B %Y")
 
-msg = EmailMessage()
-msg["Subject"] = f"Debt Review Report — {today_str}"
-msg["From"]    = EMAIL_FROM
-msg["To"]      = ", ".join(recipients)
+# -------- Email 1: Full report --------
+metrics = dashboard_metrics(report_path)
+msg_report = EmailMessage()
+msg_report["Subject"] = f"Debt Review Report — {today_str}"
+msg_report["From"]    = EMAIL_FROM
+msg_report["To"]      = EMAIL_TO_REPORT
 
-# Plain text first, then HTML (multipart/alternative)
-msg.set_content(text_body(metrics, highlights))
-msg.add_alternative(html_body(metrics, highlights), subtype="html")
-
-# Attach the Excel file
 if report_path:
-    try:
-        with open(report_path, "rb") as f:
-            data = f.read()
-        msg.add_attachment(
+    report_name = os.path.basename(report_path)
+    msg_report.set_content(text_report_body(metrics, report_name))
+    msg_report.add_alternative(html_report_body(metrics, report_name), subtype="html")
+    with open(report_path, "rb") as f:
+        msg_report.add_attachment(
+            f.read(),
+            maintype="application",
+            subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=report_name,
+        )
+    print(f"📧 Report email prepared — attach: {report_name}")
+else:
+    msg_report.set_content(f"Debt Review Report — {today_str}\n\n"
+                           "⚠️ No Excel report file was found in the repo.")
+    print("⚠️ No report file found — sending notification only.")
+
+# -------- Email 2: Failed clients --------
+msg_failed = None
+if failed_path:
+    failed_df = read_any(failed_path)
+    if failed_df is not None and not failed_df.empty:
+        base = os.path.splitext(os.path.basename(failed_path))[0]
+        attach_name = f"{base}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        data = excel_bytes(failed_df, sheet_name="Failed Clients")
+
+        msg_failed = EmailMessage()
+        msg_failed["Subject"] = f"Failed Clients — {today_str} ({len(failed_df)} rows)"
+        msg_failed["From"]    = EMAIL_FROM
+        msg_failed["To"]      = EMAIL_TO_SMS
+        msg_failed.set_content(
+            f"Failed Clients list for {today_str}.\n\n"
+            f"Total records: {len(failed_df)}\n"
+            f"Excel attachment: {attach_name}\n\n"
+            "Sent automatically by the Debt Review Dashboard workflow."
+        )
+        msg_failed.add_alternative(
+            simple_html(
+                "❌ Failed Clients",
+                f"{len(failed_df)} records · {today_str}",
+                attach_name,
+            ),
+            subtype="html",
+        )
+        msg_failed.add_attachment(
             data,
             maintype="application",
             subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            filename=os.path.basename(report_path),
+            filename=attach_name,
         )
-        print(f"   attached: {os.path.basename(report_path)} ({len(data):,} bytes)")
-    except Exception as e:
-        print(f"⚠️  Could not attach {report_path}: {e}")
+        print(f"📧 Failed email prepared — {len(failed_df)} rows → {EMAIL_TO_SMS}")
+    else:
+        print("⚠️ Failed file found but empty — skipping email.")
+else:
+    print("⚠️ No failed clients file found — skipping email.")
+
+# -------- Email 3: Intracking clients --------
+msg_tracking = None
+if tracking_path:
+    tracking_df = read_any(tracking_path)
+    if tracking_df is not None and not tracking_df.empty:
+        base = os.path.splitext(os.path.basename(tracking_path))[0]
+        attach_name = f"{base}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+        data = excel_bytes(tracking_df, sheet_name="Intracking Clients")
+
+        msg_tracking = EmailMessage()
+        msg_tracking["Subject"] = f"Intracking Clients — {today_str} ({len(tracking_df)} rows)"
+        msg_tracking["From"]    = EMAIL_FROM
+        msg_tracking["To"]      = EMAIL_TO_SMS
+        msg_tracking.set_content(
+            f"Intracking Clients list for {today_str}.\n\n"
+            f"Total records: {len(tracking_df)}\n"
+            f"Excel attachment: {attach_name}\n\n"
+            "Sent automatically by the Debt Review Dashboard workflow."
+        )
+        msg_tracking.add_alternative(
+            simple_html(
+                "🔄 Intracking Clients",
+                f"{len(tracking_df)} records · {today_str}",
+                attach_name,
+            ),
+            subtype="html",
+        )
+        msg_tracking.add_attachment(
+            data,
+            maintype="application",
+            subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=attach_name,
+        )
+        print(f"📧 Intracking email prepared — {len(tracking_df)} rows → {EMAIL_TO_SMS}")
+    else:
+        print("⚠️ Intracking file found but empty — skipping email.")
+else:
+    print("⚠️ No intracking clients file found — skipping email.")
 
 
 # ------------------------------------------------------------------
-# 8. Send
+# 7. Send all messages over one SMTP connection
 # ------------------------------------------------------------------
-def send_via_ssl():
-    ctx = ssl.create_default_context()
-    with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=ctx, timeout=30) as s:
-        s.login(SMTP_USER, SMTP_PASSWORD)
-        s.send_message(msg)
+messages = [("Report", msg_report)]
+if msg_failed:   messages.append(("Failed", msg_failed))
+if msg_tracking: messages.append(("Intracking", msg_tracking))
 
 
-def send_via_starttls():
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30) as s:
-        s.ehlo()
-        s.starttls(context=ssl.create_default_context())
-        s.ehlo()
-        s.login(SMTP_USER, SMTP_PASSWORD)
-        s.send_message(msg)
+def send_all():
+    print(f"📧 Connecting to {SMTP_SERVER}:{SMTP_PORT} …")
+    if SMTP_PORT == 465:
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=ctx, timeout=30) as s:
+            s.login(SMTP_USER, SMTP_PASSWORD)
+            for label, m in messages:
+                s.send_message(m)
+                print(f"   ✅ {label} sent → {m['To']}")
+    else:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30) as s:
+            s.ehlo()
+            s.starttls(context=ssl.create_default_context())
+            s.ehlo()
+            s.login(SMTP_USER, SMTP_PASSWORD)
+            for label, m in messages:
+                s.send_message(m)
+                print(f"   ✅ {label} sent → {m['To']}")
 
 
 try:
-    print(f"📧 Connecting to {SMTP_SERVER}:{SMTP_PORT} …")
-    if SMTP_PORT == 465:
-        send_via_ssl()
-    else:
-        send_via_starttls()
-    print(f"✅ Email sent successfully to: {', '.join(recipients)}")
+    send_all()
+    print(f"\n🎉 Done — {len(messages)} email(s) dispatched.")
 except smtplib.SMTPAuthenticationError as e:
     print(f"❌ SMTP authentication failed: {e}")
     sys.exit(1)
