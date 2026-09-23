@@ -2,23 +2,22 @@ name: Send Email
 
 on:
   workflow_run:
-    workflows: ["Refresh Metrics"]   # must match name: in refresh_metrics.yml exactly
+    workflows: ["Refresh Metrics"]     # must match name: in refresh_metrics.yml exactly
     types: [completed]
 
-  workflow_dispatch:                 # optional: lets you test the email workflow manually
+  workflow_dispatch:                    # allows manual testing of the email job
 
 jobs:
   send-email:
-    # Runs automatically ONLY when the Refresh Metrics workflow
-    # was triggered manually AND finished successfully.
-    # The extra github.event_name check allows manual test runs of this workflow.
+    # Fires when either:
+    #   1. You manually trigger this workflow, OR
+    #   2. A Refresh Metrics run finished successfully
+    #      (whether that run was manual OR scheduled)
+    # Failed or cancelled refreshes do NOT fire the email.
     if: >
       ${{
         github.event_name == 'workflow_dispatch' ||
-        (
-          github.event.workflow_run.event == 'workflow_dispatch' &&
-          github.event.workflow_run.conclusion == 'success'
-        )
+        github.event.workflow_run.conclusion == 'success'
       }}
     runs-on: ubuntu-latest
     steps:
@@ -33,6 +32,15 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Debug env
+        run: |
+          echo "SMTP_SERVER set?   ${{ secrets.SMTP_SERVER != '' }}"
+          echo "SMTP_PORT set?     ${{ secrets.SMTP_PORT != '' }}"
+          echo "SMTP_USER set?     ${{ secrets.SMTP_USER != '' }}"
+          echo "SMTP_PASSWORD set? ${{ secrets.SMTP_PASSWORD != '' }}"
+          echo "EMAIL_FROM set?    ${{ secrets.EMAIL_FROM != '' }}"
+          echo "EMAIL_TO set?      ${{ secrets.EMAIL_TO != '' }}"
+
       - name: Send email
         run: python send_email_report.py
         env:
@@ -42,4 +50,3 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_FROM:    ${{ secrets.EMAIL_FROM }}
           EMAIL_TO:      ${{ secrets.EMAIL_TO }}
-          # ... add any other env vars your email script needs
