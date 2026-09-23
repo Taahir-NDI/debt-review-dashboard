@@ -219,7 +219,7 @@ def build_report(fee_content, payment_content):
         current_sheet = all_sheets[0]
 
     # ================================================================
-    # FEE AUDIT — the LEFT side of the merge (row population)
+    # FEE AUDIT — base population (LEFT side of merge)
     # ================================================================
     fee_df = pd.read_excel(fee_content, sheet_name=current_sheet)
     s_col, id_col, amt_col, stage_col, date_col, name_col, cell_col = find_columns(fee_df)
@@ -253,7 +253,7 @@ def build_report(fee_content, payment_content):
     fee_base = fee_base[~(cancel & ~keep)].copy()
 
     # ================================================================
-    # PAYMENT STATUS REPORT — the RIGHT side (status/date overlay)
+    # PAYMENT STATUS REPORT — supplies settlement_date + fallbacks
     # ================================================================
     try:
         pay_df = pd.read_excel(payment_content, sheet_name="Details", header=3)
@@ -263,32 +263,31 @@ def build_report(fee_content, payment_content):
     p_s_col, p_id_col, p_amt_col, p_stage_col, p_date_col, p_name_col, p_cell_col = find_columns(pay_df)
     settlement_col = find_settlement_col(pay_df)
 
-    # ---- Build the merge-frame (status, amount, dates) ----
     merge_map = {
         p_id_col: "id_number",
         p_stage_col: "payment_stage",
-        p_amt_col: "amount",
-        p_s_col: "status",
-        p_date_col: "collection_date",
+        p_amt_col: "amount_pmt",
+        p_s_col: "status_pmt",
+        p_date_col: "collection_date_pmt",
     }
     if settlement_col is not None:
         merge_map[settlement_col] = "settlement_date"
 
     pmt = pay_df.rename(columns=merge_map)
-    wanted = ["id_number", "payment_stage", "amount", "status", "collection_date"]
+    wanted = ["id_number", "payment_stage", "amount_pmt", "status_pmt", "collection_date_pmt"]
     if settlement_col is not None:
         wanted.append("settlement_date")
     pmt = pmt[[c for c in wanted if c in pmt.columns]].copy()
 
     pmt["id_number"] = pmt["id_number"].apply(normalize_id)
     pmt["payment_stage"] = pd.to_numeric(pmt["payment_stage"], errors="coerce")
-    pmt["amount"] = pd.to_numeric(pmt["amount"], errors="coerce")
-    pmt["collection_date"] = pd.to_datetime(pmt["collection_date"], errors="coerce")
+    pmt["amount_pmt"] = pd.to_numeric(pmt["amount_pmt"], errors="coerce")
+    pmt["collection_date_pmt"] = pd.to_datetime(pmt["collection_date_pmt"], errors="coerce")
     if "settlement_date" in pmt.columns:
         pmt["settlement_date"] = pd.to_datetime(pmt["settlement_date"], errors="coerce")
 
     # ================================================================
-    # SMS LISTS — taken from the raw Payment Report
+    # SMS LISTS — taken straight from the Payment Report
     # ================================================================
     sms_cols = ["cell", "client_name", "id_number", "payment_stage", "amount", "status"]
     pmt_sms = pay_df.rename(columns={
@@ -304,7 +303,6 @@ def build_report(fee_content, payment_content):
         pmt_sms["cell"] = pmt_sms["cell"].apply(normalize_phone)
     pmt_sms = pmt_sms.dropna(subset=["id_number", "payment_stage", "amount"])
 
-    # Failed SMS — Settled Period Total window (last Friday → today)
     failed_keywords = ["FAILED", "FAIL", "DECLINED", "REJECTED", "DISPUTED",
                        "CLIENT CANCELLED MANDATE"]
     failed_mask = pmt_sms["status"].str.upper().str.contains("|".join(failed_keywords), na=False)
@@ -326,7 +324,7 @@ def build_report(fee_content, payment_content):
     tracking_sms_df = latest_per_client(tracking_pmt)[sms_cols].copy()
 
     # ================================================================
-    # SALE NOT SUBMITTED & CLIENT CANCELLED MANDATE — from Fee Audit
+    # SALE NOT SUBMITTED & CANCELLED MANDATE — from Fee Audit
     # ================================================================
     sns_mask = fee_base["status"].astype(str).str.upper().str.contains("SALE NOT SUBMITTED", na=False)
     sns_df = fee_base[sns_mask].copy()
@@ -347,28 +345,16 @@ def build_report(fee_content, payment_content):
         cm_df = cm_df.groupby("id_number").agg(agg_cols).reset_index()
 
     # ================================================================
-    # MERGE — Fee Audit + Payment Status Report overlay
+    # MERGE — Fee Audit is PRIMARY, Payment Report supplies fallbacks
+    # and settlement_date. Matches app.py exactly.
     # ================================================================
-    merge_cols = ["id_number", "payment_stage", "status", "amount", "collection_date"]
-    if "settlement_date" in pmt.columns:
-        merge_cols.append("settlement_date")
+    merged = fee_base.merge(pmt, on=["id_number", "payment_stage"], how="left")
 
-    merged = fee_base.merge(
-        pmt[merge_cols],
-        on=["id_number", "payment_stage"], how="left", suffixes=("", "_pmt"),
-    )
-    if "status_pmt" in merged.columns:
-        merged["status"] = merged["status_pmt"].fillna(merged["status"])
-    if "amount_pmt" in merged.columns:
-        merged["amount"] = merged["amount_pmt"].fillna(merged["amount"])
+    # Fee Audit primary, Payment Report only fills gaps
     if "collection_date_pmt" in merged.columns:
-        merged["collection_date"] = merged["collection_date_pmt"].fillna(merged["collection_date"])
-    if "settlement_date_pmt" in merged.columns:
-        merged["settlement_date"] = merged["settlement_date_pmt"]
+        merged["collection_date"] = merged["collection_date"].fillna(merged["collection_date_pmt"])
 
-    # ================================================================
-    # EFFECTIVE SETTLEMENT DATE
-    # ================================================================
+    # effective_settlement_date = Payment's settlement_date, else collection_date
     if "settlement_date" in merged.columns:
         merged["effective_settlement_date"] = merged["settlement_date"].fillna(merged["collection_date"])
     else:
@@ -377,15 +363,14 @@ def build_report(fee_content, payment_content):
     merged["status_upper"] = merged["status"].astype(str).str.upper()
     merged["payment_stage"] = pd.to_numeric(merged["payment_stage"], errors="coerce")
 
-    # ---- Clip the population to "not in the future" (matches app.py) ----
+    # Clip population to "not in the future" (matches app.py)
     merged = merged[merged["collection_date"] <= today]
     merged = merged[merged["effective_settlement_date"] <= today]
 
+    # Stage 1/2 population
     stage12 = merged[merged["payment_stage"].isin([1, 2])].copy()
 
-    # ================================================================
-    # REVENUE (rank over ALL settled rows, then applied to stage 1/2)
-    # ================================================================
+    # Revenue rank — computed over ALL settled rows, applied back to stage 1/2
     settled_all = merged[merged["status_upper"] == "SETTLED"].copy()
     settled_all = settled_all.sort_values(["id_number", "effective_settlement_date"])
     settled_all["settlement_rank"] = settled_all.groupby("id_number").cumcount() + 1
@@ -411,9 +396,8 @@ def build_report(fee_content, payment_content):
     stage12["revenue"] = stage12.apply(calc_rev, axis=1)
 
     # ================================================================
-    # METRICS
+    # METRICS — filters mirror app.py exactly
     # ================================================================
-    # ---- Settled (uses effective_settlement_date — matches app.py) ----
     settled_cycle = stage12[
         (stage12["status_upper"] == "SETTLED") &
         (stage12["effective_settlement_date"] >= last_friday)
@@ -430,7 +414,6 @@ def build_report(fee_content, payment_content):
     revenue_mtd = settled_mtd["revenue"].sum()
     revenue_total = revenue_cycle
 
-    # ---- Failed / Disputed (uses collection_date — matches app.py) ----
     failed_cycle = stage12[
         (stage12["status_upper"] == "FAILED") &
         (stage12["collection_date"] >= last_friday)
@@ -451,7 +434,6 @@ def build_report(fee_content, payment_content):
     denom = settled_mtd_v + failed_mtd_v + disputed_mtd_v
     success_rate = (settled_mtd_v / denom * 100) if denom > 0 else 0
 
-    # ---- Debits ----
     future_mask = fee_base["status"].astype(str).str.upper().str.contains("FUTURE", na=False)
     future_df = fee_base[future_mask & fee_base["payment_stage"].isin([1, 2])].dropna(subset=["collection_date"])
     tomorrow = today + timedelta(days=1)
@@ -471,29 +453,21 @@ def build_report(fee_content, payment_content):
     metrics = {
         "report_date": today.strftime("%Y-%m-%d"),
         "month": today.strftime("%B %Y"),
-        # Settled
         "settled_mtd_v": float(settled_mtd_v),
         "settled_cycle_v": float(settled_cycle_v),
         "settled_today_c": int(len(settled_mtd[settled_mtd["effective_settlement_date"] == today])),
-        # Failed
         "failed_mtd_v": float(failed_mtd_v),
         "failed_cycle_v": float(failed_cycle_v),
         "failed_cycle_c": int(failed_cycle["id_number"].nunique()) if not failed_cycle.empty else 0,
-        # Disputed
         "disputed_v": float(disputed_mtd_v),
         "disputed_c": int(disputed_mtd["id_number"].nunique()) if not disputed_mtd.empty else 0,
-        # Revenue
         "revenue_total": float(revenue_total),
         "revenue_cycle": float(revenue_cycle),
         "revenue_mtd": float(revenue_mtd),
-        # Success
         "success_rate": float(success_rate),
-        # Debits
         "current_debits_v": float(current_debits_v),
         "next_debits_v": float(next_debits_v),
-        # Tracking
         "tracking_c": int(tracking_pmt["id_number"].nunique()) if not tracking_pmt.empty else 0,
-        # Independent statuses
         "cancelled_mandate_v": float(cm_df["amount"].sum()) if not cm_df.empty else 0.0,
         "cancelled_mandate_c": int(cm_df["id_number"].nunique()) if not cm_df.empty else 0,
         "sale_not_submitted_v": float(sns_df["amount"].sum()) if not sns_df.empty else 0.0,
