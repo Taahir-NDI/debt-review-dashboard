@@ -350,11 +350,9 @@ def build_report(fee_content, payment_content):
     # ================================================================
     merged = fee_base.merge(pmt, on=["id_number", "payment_stage"], how="left")
 
-    # Fee Audit primary, Payment Report only fills gaps
     if "collection_date_pmt" in merged.columns:
         merged["collection_date"] = merged["collection_date"].fillna(merged["collection_date_pmt"])
 
-    # effective_settlement_date = Payment's settlement_date, else collection_date
     if "settlement_date" in merged.columns:
         merged["effective_settlement_date"] = merged["settlement_date"].fillna(merged["collection_date"])
     else:
@@ -363,11 +361,9 @@ def build_report(fee_content, payment_content):
     merged["status_upper"] = merged["status"].astype(str).str.upper()
     merged["payment_stage"] = pd.to_numeric(merged["payment_stage"], errors="coerce")
 
-    # Clip population to "not in the future" (matches app.py)
     merged = merged[merged["collection_date"] <= today]
     merged = merged[merged["effective_settlement_date"] <= today]
 
-    # Stage 1/2 population
     stage12 = merged[merged["payment_stage"].isin([1, 2])].copy()
 
     # Revenue rank — computed over ALL settled rows, applied back to stage 1/2
@@ -450,24 +446,48 @@ def build_report(fee_content, payment_content):
         (future_df["collection_date"] <= last_of_next)
     ]["amount"].sum()
 
+    # ---- Settled Today + counts (email preview fields) ----
+    settled_today = settled_mtd[settled_mtd["effective_settlement_date"] == today]
+    settled_today_v = settled_today["amount"].sum()
+    settled_today_c = len(settled_today)
+
+    settled_cycle_c = len(settled_cycle)
+
+    tracking_v = tracking_pmt["amount"].sum() if not tracking_pmt.empty else 0
+
+    failed_mtd_c = int(failed_mtd["id_number"].nunique()) if not failed_mtd.empty else 0
+
     metrics = {
         "report_date": today.strftime("%Y-%m-%d"),
         "month": today.strftime("%B %Y"),
-        "settled_mtd_v": float(settled_mtd_v),
+
+        # ---- Dashboard-matched KPIs (exact fields the email preview shows) ----
+        "settled_today_v": float(settled_today_v),
+        "settled_today_c": int(settled_today_c),
+
         "settled_cycle_v": float(settled_cycle_v),
-        "settled_today_c": int(len(settled_mtd[settled_mtd["effective_settlement_date"] == today])),
-        "failed_mtd_v": float(failed_mtd_v),
+        "settled_cycle_c": int(settled_cycle_c),
+
+        "success_rate": float(success_rate),
+
+        "tracking_v": float(tracking_v),
+        "tracking_c": int(tracking_pmt["id_number"].nunique()) if not tracking_pmt.empty else 0,
+
         "failed_cycle_v": float(failed_cycle_v),
         "failed_cycle_c": int(failed_cycle["id_number"].nunique()) if not failed_cycle.empty else 0,
+
+        "failed_mtd_v": float(failed_mtd_v),
+        "failed_mtd_c": int(failed_mtd_c),
+
+        # ---- Kept for Excel + historical tracking ----
+        "settled_mtd_v": float(settled_mtd_v),
         "disputed_v": float(disputed_mtd_v),
         "disputed_c": int(disputed_mtd["id_number"].nunique()) if not disputed_mtd.empty else 0,
         "revenue_total": float(revenue_total),
         "revenue_cycle": float(revenue_cycle),
         "revenue_mtd": float(revenue_mtd),
-        "success_rate": float(success_rate),
         "current_debits_v": float(current_debits_v),
         "next_debits_v": float(next_debits_v),
-        "tracking_c": int(tracking_pmt["id_number"].nunique()) if not tracking_pmt.empty else 0,
         "cancelled_mandate_v": float(cm_df["amount"].sum()) if not cm_df.empty else 0.0,
         "cancelled_mandate_c": int(cm_df["id_number"].nunique()) if not cm_df.empty else 0,
         "sale_not_submitted_v": float(sns_df["amount"].sum()) if not sns_df.empty else 0.0,
