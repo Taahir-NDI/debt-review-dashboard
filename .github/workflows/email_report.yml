@@ -2,16 +2,12 @@ name: Send Email
 
 on:
   workflow_run:
-    workflows: ["Refresh Metrics"]    # must match the name: above exactly
+    workflows: ["Refresh Metrics"]
     types: [completed]
   workflow_dispatch:
 
 jobs:
   send-email:
-    # Runs when either:
-    #   1. You manually trigger this workflow, OR
-    #   2. Any Refresh Metrics run finished successfully
-    # Failed or cancelled refreshes do NOT fire the email.
     if: >
       ${{
         github.event_name == 'workflow_dispatch' ||
