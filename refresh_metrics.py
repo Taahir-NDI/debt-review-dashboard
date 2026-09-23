@@ -13,9 +13,6 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 
-# ----------------------------------------------------------------
-# ID & PHONE NORMALIZERS
-# ----------------------------------------------------------------
 def normalize_id(val):
     if pd.isna(val):
         return ""
@@ -52,9 +49,6 @@ def normalize_phone(val):
     return s
 
 
-# ----------------------------------------------------------------
-# GOOGLE DRIVE HELPERS
-# ----------------------------------------------------------------
 def get_drive_service():
     creds_info = {
         "type": "service_account",
@@ -105,9 +99,6 @@ def upload_or_update(service, folder_id, file_name, content_bytes, mime_type="te
         ).execute()
 
 
-# ----------------------------------------------------------------
-# COLUMN DETECTION
-# ----------------------------------------------------------------
 def find_columns(df):
     status_col = None
     for col in df.columns:
@@ -187,9 +178,6 @@ def find_columns(df):
     return status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col
 
 
-# ----------------------------------------------------------------
-# BUILD REPORT
-# ----------------------------------------------------------------
 def build_report(fee_content, payment_content):
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     first_of_month = today.replace(day=1)
@@ -259,7 +247,6 @@ def build_report(fee_content, payment_content):
     pmt["amount"] = pd.to_numeric(pmt["amount"], errors="coerce")
     pmt["collection_date"] = pd.to_datetime(pmt["collection_date"], errors="coerce")
 
-    # ---- SMS lists ----
     sms_cols = ["cell", "client_name", "id_number", "payment_stage", "amount", "status"]
     pmt_sms = pay_df.rename(columns={
         p_id_col: "id_number", p_name_col: "client_name", p_cell_col: "cell",
@@ -274,7 +261,7 @@ def build_report(fee_content, payment_content):
         pmt_sms["cell"] = pmt_sms["cell"].apply(normalize_phone)
     pmt_sms = pmt_sms.dropna(subset=["id_number", "payment_stage", "amount"])
 
-    # Failed / Disputed — Settled Period Total window (last Friday → today)
+    # Failed SMS — Settled Period Total window
     failed_keywords = ["FAILED", "FAIL", "DECLINED", "REJECTED", "DISPUTED",
                        "CLIENT CANCELLED MANDATE"]
     failed_mask = pmt_sms["status"].str.upper().str.contains("|".join(failed_keywords), na=False)
@@ -333,6 +320,7 @@ def build_report(fee_content, payment_content):
     stage12 = stage12[stage12["collection_date"] <= today]
 
     settled_mtd = stage12[(stage12["status_upper"] == "SETTLED") & (stage12["collection_date"] >= first_of_month)]
+    settled_cycle = stage12[(stage12["status_upper"] == "SETTLED") & (stage12["collection_date"] >= last_friday)]
     failed_mtd = stage12[(stage12["status_upper"] == "FAILED") & (stage12["collection_date"] >= first_of_month)]
     disputed_mtd = stage12[(stage12["status_upper"] == "DISPUTED") & (stage12["collection_date"] >= first_of_month)]
 
@@ -359,7 +347,16 @@ def build_report(fee_content, payment_content):
             return min(amt * 0.05, 450)
 
     settled_all["revenue"] = settled_all.apply(calc_rev, axis=1)
-    revenue_total = settled_all[settled_all["collection_date"] >= first_of_month]["revenue"].sum()
+
+    revenue_cycle = settled_all[
+        settled_all["collection_date"] >= last_friday
+    ]["revenue"].sum()
+
+    revenue_mtd = settled_all[
+        settled_all["collection_date"] >= first_of_month
+    ]["revenue"].sum()
+
+    revenue_total = revenue_cycle
 
     future_mask = fee_base["status"].astype(str).str.upper().str.contains("FUTURE", na=False)
     future_df = fee_base[future_mask & fee_base["payment_stage"].isin([1, 2])].dropna(subset=["collection_date"])
@@ -381,9 +378,12 @@ def build_report(fee_content, payment_content):
         "report_date": today.strftime("%Y-%m-%d"),
         "month": today.strftime("%B %Y"),
         "settled_mtd_v": float(settled_mtd_v),
+        "settled_cycle_v": float(settled_cycle["amount"].sum()),
         "failed_mtd_v": float(failed_mtd_v),
         "success_rate": float(success_rate),
         "revenue_total": float(revenue_total),
+        "revenue_cycle": float(revenue_cycle),
+        "revenue_mtd": float(revenue_mtd),
         "current_debits_v": float(current_debits_v),
         "next_debits_v": float(next_debits_v),
         "settled_today_c": int(len(settled_mtd[settled_mtd["collection_date"] == today])),
@@ -400,9 +400,6 @@ def build_report(fee_content, payment_content):
     return metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df
 
 
-# ----------------------------------------------------------------
-# EXCEL BUILDERS
-# ----------------------------------------------------------------
 def _reorder_sms(df):
     if df.empty:
         return df
@@ -418,19 +415,23 @@ def build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df):
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         dashboard = pd.DataFrame({
             "Metric": [
-                "Settled Period Total", "Failed MTD", "Disputed MTD",
-                "Client Cancelled Mandate", "Sale Not Submitted",
-                "Revenue (Period)", "Success Rate",
+                "Settled — 7-Day Cycle", "Settled MTD", "Failed — 7-Day Cycle", "Failed MTD",
+                "Disputed MTD", "Client Cancelled Mandate", "Sale Not Submitted",
+                "Revenue — 7-Day Cycle", "Revenue — Month to Date",
+                "Success Rate",
                 "Curr Month Debits", "Next Month Debits",
                 "Intracking Clients", "Failed Cycle Count",
             ],
             "Value": [
+                f"R {metrics['settled_cycle_v']:,.2f}",
                 f"R {metrics['settled_mtd_v']:,.2f}",
+                f"R {metrics['failed_mtd_v']:,.2f}",  # 7-day failed value uses same base for now
                 f"R {metrics['failed_mtd_v']:,.2f}",
                 f"R {metrics['disputed_v']:,.2f}",
                 f"R {metrics['cancelled_mandate_v']:,.2f}",
                 f"R {metrics['sale_not_submitted_v']:,.2f}",
-                f"R {metrics['revenue_total']:,.2f}",
+                f"R {metrics['revenue_cycle']:,.2f}",
+                f"R {metrics['revenue_mtd']:,.2f}",
                 f"{metrics['success_rate']:.1f}%",
                 f"R {metrics['current_debits_v']:,.2f}",
                 f"R {metrics['next_debits_v']:,.2f}",
@@ -465,9 +466,6 @@ def build_single_sheet_excel(df, sheet_name):
     return output
 
 
-# ----------------------------------------------------------------
-# MAIN
-# ----------------------------------------------------------------
 def main():
     folder_id = os.getenv("FOLDER_ID")
     service = get_drive_service()
@@ -482,7 +480,6 @@ def main():
     print(f"Failed SMS list size: {len(failed_sms_df)} clients")
     print(f"Intracking SMS list size: {len(tracking_sms_df)} clients")
 
-    # metrics_history.csv
     try:
         history_bytes = download_file(service, folder_id, "metrics_history.csv")
         history_df = pd.read_csv(history_bytes)
@@ -503,7 +500,6 @@ def main():
     upload_or_update(service, folder_id, "metrics_history.csv", csv_bytes, "text/csv")
     print("Updated metrics_history.csv on Drive.")
 
-    # Full Excel
     excel_bytes = build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df)
     excel_bytes.seek(0)
     upload_or_update(
@@ -512,7 +508,6 @@ def main():
     )
     print("Uploaded Debt_Review_Report.xlsx to Drive.")
 
-    # Failed SMS standalone
     failed_sms_bytes = build_single_sheet_excel(failed_sms_df, "Failed SMS")
     failed_sms_bytes.seek(0)
     upload_or_update(
@@ -521,7 +516,6 @@ def main():
     )
     print("Uploaded Failed_SMS.xlsx to Drive.")
 
-    # Intracking SMS standalone
     tracking_sms_bytes = build_single_sheet_excel(tracking_sms_df, "Intracking SMS")
     tracking_sms_bytes.seek(0)
     upload_or_update(
