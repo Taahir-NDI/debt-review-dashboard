@@ -5,15 +5,10 @@ on:
     workflows: ["Refresh Metrics"]     # must match name: in refresh_metrics.yml exactly
     types: [completed]
 
-  workflow_dispatch:                    # allows manual testing of the email job
+  workflow_dispatch:
 
 jobs:
   send-email:
-    # Fires when either:
-    #   1. You manually trigger this workflow, OR
-    #   2. A Refresh Metrics run finished successfully
-    #      (whether that run was manual OR scheduled)
-    # Failed or cancelled refreshes do NOT fire the email.
     if: >
       ${{
         github.event_name == 'workflow_dispatch' ||
@@ -34,12 +29,16 @@ jobs:
 
       - name: Debug env
         run: |
-          echo "SMTP_SERVER set?   ${{ secrets.SMTP_SERVER != '' }}"
-          echo "SMTP_PORT set?     ${{ secrets.SMTP_PORT != '' }}"
-          echo "SMTP_USER set?     ${{ secrets.SMTP_USER != '' }}"
-          echo "SMTP_PASSWORD set? ${{ secrets.SMTP_PASSWORD != '' }}"
-          echo "EMAIL_FROM set?    ${{ secrets.EMAIL_FROM != '' }}"
-          echo "EMAIL_TO set?      ${{ secrets.EMAIL_TO != '' }}"
+          echo "SMTP_SERVER set?    ${{ secrets.SMTP_SERVER != '' }}"
+          echo "SMTP_PORT set?      ${{ secrets.SMTP_PORT != '' }}"
+          echo "SMTP_USER set?      ${{ secrets.SMTP_USER != '' }}"
+          echo "SMTP_PASSWORD set?  ${{ secrets.SMTP_PASSWORD != '' }}"
+          echo "EMAIL_FROM set?     ${{ secrets.EMAIL_FROM != '' }}"
+          echo "EMAIL_TO set?       ${{ secrets.EMAIL_TO != '' }}"
+          echo "TO_EMAIL_SMS set?   ${{ secrets.TO_EMAIL_SMS != '' }}"
+
+      - name: List files in repo (debug)
+        run: ls -la && echo "---" && ls -la *.xlsx *.csv 2>/dev/null || true
 
       - name: Send email
         run: python send_email_report.py
@@ -50,3 +49,4 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_FROM:    ${{ secrets.EMAIL_FROM }}
           EMAIL_TO:      ${{ secrets.EMAIL_TO }}
+          TO_EMAIL_SMS:  ${{ secrets.TO_EMAIL_SMS }}
