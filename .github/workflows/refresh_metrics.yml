@@ -3,7 +3,7 @@ name: Refresh Metrics
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */8 * * *'    # every 8 hours
+    - cron: '0 */8 * * *'    # every 8 hours: 02:00, 10:00, 18:00 UTC
 
 jobs:
   refresh:
