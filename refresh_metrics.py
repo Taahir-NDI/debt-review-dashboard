@@ -274,7 +274,7 @@ def build_report(fee_content, payment_content):
         pmt_sms["cell"] = pmt_sms["cell"].apply(normalize_phone)
     pmt_sms = pmt_sms.dropna(subset=["id_number", "payment_stage", "amount"])
 
-    # Failed / Disputed — within Settled Period Total window (last Friday → today)
+    # Failed / Disputed — Settled Period Total window (last Friday → today)
     failed_keywords = ["FAILED", "FAIL", "DECLINED", "REJECTED", "DISPUTED",
                        "CLIENT CANCELLED MANDATE"]
     failed_mask = pmt_sms["status"].str.upper().str.contains("|".join(failed_keywords), na=False)
@@ -295,7 +295,7 @@ def build_report(fee_content, payment_content):
     failed_sms_df = latest_per_client(failed_pmt)[sms_cols].copy()
     tracking_sms_df = latest_per_client(tracking_pmt)[sms_cols].copy()
 
-    # Sale Not Submitted — from Fee Audit, all rows for the current month
+    # Sale Not Submitted — from Fee Audit, all current-month rows
     sns_mask = fee_base["status"].astype(str).str.upper().str.contains("SALE NOT SUBMITTED", na=False)
     sns_df = fee_base[sns_mask].copy()
     if not sns_df.empty:
@@ -305,7 +305,7 @@ def build_report(fee_content, payment_content):
                 agg_cols[c] = "sum" if c == "amount" else "first"
         sns_df = sns_df.groupby("id_number").agg(agg_cols).reset_index()
 
-    # Client Cancelled Mandate — from Fee Audit
+    # Client Cancelled Mandate
     cm_mask = fee_base["status"].astype(str).str.upper().str.contains("CLIENT CANCELLED MANDATE", na=False)
     cm_df = fee_base[cm_mask].copy()
     if not cm_df.empty:
@@ -404,7 +404,6 @@ def build_report(fee_content, payment_content):
 # EXCEL BUILDERS
 # ----------------------------------------------------------------
 def _reorder_sms(df):
-    """Return df with columns in order Cell, Name, ID NUMBER, Stage, Amount, Status."""
     if df.empty:
         return df
     out = df.rename(columns={
@@ -483,7 +482,7 @@ def main():
     print(f"Failed SMS list size: {len(failed_sms_df)} clients")
     print(f"Intracking SMS list size: {len(tracking_sms_df)} clients")
 
-    # ---- metrics_history.csv ----
+    # metrics_history.csv
     try:
         history_bytes = download_file(service, folder_id, "metrics_history.csv")
         history_df = pd.read_csv(history_bytes)
@@ -504,7 +503,7 @@ def main():
     upload_or_update(service, folder_id, "metrics_history.csv", csv_bytes, "text/csv")
     print("Updated metrics_history.csv on Drive.")
 
-    # ---- Full Excel report ----
+    # Full Excel
     excel_bytes = build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df)
     excel_bytes.seek(0)
     upload_or_update(
@@ -513,7 +512,7 @@ def main():
     )
     print("Uploaded Debt_Review_Report.xlsx to Drive.")
 
-    # ---- Failed SMS standalone ----
+    # Failed SMS standalone
     failed_sms_bytes = build_single_sheet_excel(failed_sms_df, "Failed SMS")
     failed_sms_bytes.seek(0)
     upload_or_update(
@@ -522,7 +521,7 @@ def main():
     )
     print("Uploaded Failed_SMS.xlsx to Drive.")
 
-    # ---- Intracking SMS standalone ----
+    # Intracking SMS standalone
     tracking_sms_bytes = build_single_sheet_excel(tracking_sms_df, "Intracking SMS")
     tracking_sms_bytes.seek(0)
     upload_or_update(
