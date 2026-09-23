@@ -21,11 +21,12 @@ DASHBOARD_URL    = os.getenv("DASHBOARD_URL", "https://your-dashboard.streamlit.
 FOLDER_ID        = os.getenv("FOLDER_ID")
 
 DEFAULT_METRICS = {
-    "settled_mtd_v": 0, "settled_cycle_v": 0,
-    "failed_mtd_v": 0, "success_rate": 0,
-    "revenue_total": 0, "revenue_cycle": 0, "revenue_mtd": 0,
-    "current_debits_v": 0, "next_debits_v": 0,
-    "tracking_c": 0, "failed_cycle_c": 0,
+    "settled_today_v": 0, "settled_today_c": 0,
+    "settled_cycle_v": 0, "settled_cycle_c": 0,
+    "success_rate": 0,
+    "tracking_v": 0, "tracking_c": 0,
+    "failed_cycle_v": 0, "failed_cycle_c": 0,
+    "failed_mtd_v": 0, "failed_mtd_c": 0,
 }
 
 
@@ -73,17 +74,17 @@ def get_metrics():
         if len(df) > 0:
             latest = df.sort_values("report_date").iloc[-1]
             return {
-                "settled_mtd_v":    float(latest.get("settled_mtd_v", 0) or 0),
-                "settled_cycle_v":  float(latest.get("settled_cycle_v", 0) or 0),
-                "failed_mtd_v":     float(latest.get("failed_mtd_v", 0) or 0),
-                "success_rate":     float(latest.get("success_rate", 0) or 0),
-                "revenue_total":    float(latest.get("revenue_total", 0) or 0),
-                "revenue_cycle":    float(latest.get("revenue_cycle", latest.get("revenue_total", 0)) or 0),
-                "revenue_mtd":      float(latest.get("revenue_mtd", 0) or 0),
-                "current_debits_v": float(latest.get("current_debits_v", 0) or 0),
-                "next_debits_v":    float(latest.get("next_debits_v", 0) or 0),
-                "tracking_c":       float(latest.get("tracking_c", 0) or 0),
-                "failed_cycle_c":   float(latest.get("failed_cycle_c", 0) or 0),
+                "settled_today_v": float(latest.get("settled_today_v", 0) or 0),
+                "settled_today_c": int(float(latest.get("settled_today_c", 0) or 0)),
+                "settled_cycle_v": float(latest.get("settled_cycle_v", 0) or 0),
+                "settled_cycle_c": int(float(latest.get("settled_cycle_c", 0) or 0)),
+                "success_rate":    float(latest.get("success_rate", 0) or 0),
+                "tracking_v":      float(latest.get("tracking_v", 0) or 0),
+                "tracking_c":      int(float(latest.get("tracking_c", 0) or 0)),
+                "failed_cycle_v":  float(latest.get("failed_cycle_v", 0) or 0),
+                "failed_cycle_c":  int(float(latest.get("failed_cycle_c", 0) or 0)),
+                "failed_mtd_v":    float(latest.get("failed_mtd_v", 0) or 0),
+                "failed_mtd_c":    int(float(latest.get("failed_mtd_c", 0) or 0)),
             }
     except Exception as e:
         print(f"Could not read metrics from Drive: {e}")
@@ -92,72 +93,76 @@ def get_metrics():
 
 def main_html(metrics):
     today = datetime.now().strftime("%d %B %Y")
+
+    def row(label, value, count_label=None):
+        count_html = (
+            f"<div style='font-size:13px;color:#6c757d;margin-top:2px;'>{count_label}</div>"
+            if count_label else ""
+        )
+        return f"""
+        <tr>
+            <td style="padding:14px 16px;border-bottom:1px solid #eef0f3;vertical-align:middle;">
+                <div style="font-size:14px;color:#1e1e2d;font-weight:600;">{label}</div>
+            </td>
+            <td style="padding:14px 16px;border-bottom:1px solid #eef0f3;text-align:right;vertical-align:middle;">
+                <div style="font-size:20px;color:#1e1e2d;font-weight:700;">{value}</div>
+                {count_html}
+            </td>
+        </tr>
+        """
+
+    rows = (
+        row("Settled Today", f"R {metrics['settled_today_v']:,.2f}",
+            f"{metrics['settled_today_c']} clients") +
+        row("Settled Period", f"R {metrics['settled_cycle_v']:,.2f}",
+            f"{metrics['settled_cycle_c']} clients") +
+        row("Success Rate", f"{metrics['success_rate']:.1f}%") +
+        row("Intracking", f"R {metrics['tracking_v']:,.2f}",
+            f"{metrics['tracking_c']} clients") +
+        row("Failed Period", f"R {metrics['failed_cycle_v']:,.2f}",
+            f"{metrics['failed_cycle_c']} clients") +
+        row("Failed MTD", f"R {metrics['failed_mtd_v']:,.2f}",
+            f"{metrics['failed_mtd_c']} clients")
+    )
+
     return f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <style>
-            body {{ font-family: Arial, sans-serif; background-color: #f8f9fa; padding: 20px; }}
-            .container {{ max-width: 600px; margin: 0 auto; background: white;
-                          border-radius: 12px; padding: 30px;
-                          box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-            .header {{ border-bottom: 2px solid #4e8cff; padding-bottom: 15px; margin-bottom: 20px; }}
-            h1 {{ color: #1e1e2d; font-size: 24px; margin: 0; }}
-            .subtitle {{ color: #6c757d; font-size: 14px; }}
-            .metric-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0; }}
-            .metric-card {{ background: #f8f9fa; border-radius: 8px; padding: 15px;
-                            border-left: 4px solid #4e8cff; }}
-            .metric-label {{ font-size: 12px; color: #8a8a8a; text-transform: uppercase; letter-spacing: 0.3px; }}
-            .metric-value {{ font-size: 22px; font-weight: 700; color: #1e1e2d; }}
-            .metric-delta {{ font-size: 13px; color: #6c757d; }}
-            .btn {{ display: inline-block; background: #4e8cff; color: white;
-                    padding: 10px 20px; border-radius: 6px; text-decoration: none; margin-top: 10px; }}
-            .footer {{ margin-top: 30px; padding-top: 15px; border-top: 1px solid #dee2e6;
-                       font-size: 12px; color: #6c757d; text-align: center; }}
-        </style>
+        <meta charset="utf-8">
     </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>Debt Review Dashboard Report</h1>
-                <div class="subtitle">Generated on {today}</div>
+    <body style="margin:0;padding:0;background:#f5f6f8;font-family:Arial,Helvetica,sans-serif;color:#1e1e2d;">
+        <div style="max-width:560px;margin:0 auto;padding:24px 12px;">
+
+            <div style="background:#ffffff;border-radius:12px;padding:26px 26px 20px 26px;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+
+                <h2 style="margin:0 0 4px 0;font-size:22px;color:#1e1e2d;">
+                    Debt Review Dashboard
+                </h2>
+                <p style="margin:0 0 20px 0;color:#6c757d;font-size:14px;">
+                    Report generated {today}
+                </p>
+
+                <table style="width:100%;border-collapse:collapse;">
+                    {rows}
+                </table>
+
+                <div style="text-align:center;margin-top:24px;">
+                    <a href="{DASHBOARD_URL}"
+                       style="display:inline-block;background:#4e8cff;color:#ffffff;
+                              padding:10px 22px;border-radius:6px;text-decoration:none;
+                              font-size:14px;font-weight:600;">
+                        View Full Dashboard &rarr;
+                    </a>
+                </div>
+
+                <hr style="border:none;border-top:1px solid #eef0f3;margin:24px 0 12px 0;">
+                <p style="margin:0;font-size:12px;color:#9aa0a6;text-align:center;">
+                    Sent automatically by the Debt Review Dashboard workflow.<br>
+                    Full Excel report attached.
+                </p>
             </div>
-            <div class="metric-grid">
-                <div class="metric-card" style="border-left-color: #28a745;">
-                    <div class="metric-label">Revenue — 7-Day Cycle</div>
-                    <div class="metric-value">R {metrics['revenue_cycle']:,.2f}</div>
-                    <div class="metric-delta">MTD: R {metrics['revenue_mtd']:,.2f}</div>
-                </div>
-                <div class="metric-card" style="border-left-color: #6f42c1;">
-                    <div class="metric-label">Success Rate</div>
-                    <div class="metric-value">{metrics['success_rate']:.1f}%</div>
-                </div>
-                <div class="metric-card" style="border-left-color: #17a2b8;">
-                    <div class="metric-label">Settled — 7-Day Cycle</div>
-                    <div class="metric-value">R {metrics['settled_cycle_v']:,.2f}</div>
-                </div>
-                <div class="metric-card" style="border-left-color: #dc3545;">
-                    <div class="metric-label">Failed Amount (MTD)</div>
-                    <div class="metric-value">R {metrics['failed_mtd_v']:,.2f}</div>
-                </div>
-                <div class="metric-card" style="border-left-color: #ff9f43;">
-                    <div class="metric-label">Current Month Debits</div>
-                    <div class="metric-value">R {metrics['current_debits_v']:,.2f}</div>
-                    <div class="metric-delta">Next Month: R {metrics['next_debits_v']:,.2f}</div>
-                </div>
-                <div class="metric-card" style="border-left-color: #20c997;">
-                    <div class="metric-label">Intracking Clients</div>
-                    <div class="metric-value">{metrics['tracking_c']:.0f} clients</div>
-                    <div class="metric-delta">Failed: {metrics['failed_cycle_c']:.0f}</div>
-                </div>
-            </div>
-            <div style="text-align: center; margin-top: 15px;">
-                <a href="{DASHBOARD_URL}" class="btn">View Full Dashboard &rarr;</a>
-            </div>
-            <div class="footer">
-                Automated report from Debt Review Dashboard<br>
-                Full Excel report attached.
-            </div>
+
         </div>
     </body>
     </html>
@@ -170,35 +175,33 @@ def sms_html():
     <!DOCTYPE html>
     <html>
     <head>
-        <style>
-            body {{ font-family: Arial, sans-serif; background-color: #f8f9fa; padding: 20px; }}
-            .container {{ max-width: 600px; margin: 0 auto; background: white;
-                          border-radius: 12px; padding: 30px;
-                          box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-            .header {{ border-bottom: 2px solid #dc3545; padding-bottom: 15px; margin-bottom: 20px; }}
-            h1 {{ color: #1e1e2d; font-size: 22px; margin: 0; }}
-            .subtitle {{ color: #6c757d; font-size: 14px; }}
-            .note {{ background: #fff3cd; border-left: 4px solid #ffc107;
-                     padding: 12px 16px; border-radius: 6px; margin: 20px 0;
-                     font-size: 14px; color: #664d03; }}
-            .footer {{ margin-top: 30px; padding-top: 15px; border-top: 1px solid #dee2e6;
-                       font-size: 12px; color: #6c757d; text-align: center; }}
-        </style>
+        <meta charset="utf-8">
     </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>SMS Lists — Failed &amp; Intracking</h1>
-                <div class="subtitle">Generated on {today}</div>
+    <body style="margin:0;padding:0;background:#f5f6f8;font-family:Arial,Helvetica,sans-serif;">
+        <div style="max-width:560px;margin:0 auto;padding:24px 12px;">
+            <div style="background:#ffffff;border-radius:12px;padding:26px;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+
+                <h2 style="margin:0 0 4px 0;font-size:20px;color:#1e1e2d;">
+                    SMS Lists — Failed &amp; Intracking
+                </h2>
+                <p style="margin:0 0 18px 0;color:#6c757d;font-size:14px;">
+                    Generated {today}
+                </p>
+
+                <div style="background:#fff8e1;border-left:4px solid #ffc107;
+                            padding:12px 16px;border-radius:6px;font-size:14px;color:#664d03;">
+                    Attached for the SMS team:
+                    <ul style="margin:8px 0 0 0;padding-left:20px;">
+                        <li><strong>Failed_SMS.xlsx</strong> — Failed, Disputed, and Cancelled Mandate clients within the current Settled Period</li>
+                        <li><strong>Intracking_SMS.xlsx</strong> — clients currently being tracked</li>
+                    </ul>
+                </div>
+
+                <hr style="border:none;border-top:1px solid #eef0f3;margin:22px 0 12px 0;">
+                <p style="margin:0;font-size:12px;color:#9aa0a6;text-align:center;">
+                    Sent automatically by the Debt Review Dashboard workflow.
+                </p>
             </div>
-            <div class="note">
-                Attached for the SMS team:
-                <ul>
-                    <li><strong>Failed_SMS.xlsx</strong> — Failed, Disputed, and Cancelled Mandate clients within the current Settled Period</li>
-                    <li><strong>Intracking_SMS.xlsx</strong> — clients currently being tracked</li>
-                </ul>
-            </div>
-            <div class="footer">Automated SMS lists from Debt Review Dashboard</div>
         </div>
     </body>
     </html>
