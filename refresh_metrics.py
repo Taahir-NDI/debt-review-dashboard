@@ -13,6 +13,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
 
+# ----------------------------------------------------------------
+# ID & PHONE NORMALIZERS
+# ----------------------------------------------------------------
 def normalize_id(val):
     if pd.isna(val):
         return ""
@@ -49,6 +52,9 @@ def normalize_phone(val):
     return s
 
 
+# ----------------------------------------------------------------
+# GOOGLE DRIVE HELPERS
+# ----------------------------------------------------------------
 def get_drive_service():
     creds_info = {
         "type": "service_account",
@@ -99,6 +105,9 @@ def upload_or_update(service, folder_id, file_name, content_bytes, mime_type="te
         ).execute()
 
 
+# ----------------------------------------------------------------
+# COLUMN DETECTION
+# ----------------------------------------------------------------
 def find_columns(df):
     status_col = None
     for col in df.columns:
@@ -178,6 +187,17 @@ def find_columns(df):
     return status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col
 
 
+def find_settlement_col(df):
+    """Locate a 'SETTLEMENT DATE' column, if present."""
+    for col in df.columns:
+        if "SETTLEMENT DATE" in str(col).upper():
+            return col
+    return None
+
+
+# ----------------------------------------------------------------
+# BUILD REPORT
+# ----------------------------------------------------------------
 def build_report(fee_content, payment_content):
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     first_of_month = today.replace(day=1)
@@ -198,7 +218,9 @@ def build_report(fee_content, payment_content):
     if current_sheet is None:
         current_sheet = all_sheets[0]
 
-    # ---- Fee Audit ----
+    # ================================================================
+    # FEE AUDIT — the LEFT side of the merge (row population)
+    # ================================================================
     fee_df = pd.read_excel(fee_content, sheet_name=current_sheet)
     s_col, id_col, amt_col, stage_col, date_col, name_col, cell_col = find_columns(fee_df)
 
@@ -230,23 +252,44 @@ def build_report(fee_content, payment_content):
     keep = status_up.str.contains("CLIENT CANCELLED MANDATE", na=False)
     fee_base = fee_base[~(cancel & ~keep)].copy()
 
-    # ---- Payment Status Report ----
+    # ================================================================
+    # PAYMENT STATUS REPORT — the RIGHT side (status/date overlay)
+    # ================================================================
     try:
         pay_df = pd.read_excel(payment_content, sheet_name="Details", header=3)
     except Exception:
         pay_df = pd.read_excel(payment_content, header=3)
 
     p_s_col, p_id_col, p_amt_col, p_stage_col, p_date_col, p_name_col, p_cell_col = find_columns(pay_df)
+    settlement_col = find_settlement_col(pay_df)
 
-    pmt = pay_df.rename(columns={
-        p_id_col: "id_number", p_stage_col: "payment_stage", p_amt_col: "amount",
-        p_s_col: "status", p_date_col: "collection_date",
-    })
+    # ---- Build the merge-frame (status, amount, dates) ----
+    merge_map = {
+        p_id_col: "id_number",
+        p_stage_col: "payment_stage",
+        p_amt_col: "amount",
+        p_s_col: "status",
+        p_date_col: "collection_date",
+    }
+    if settlement_col is not None:
+        merge_map[settlement_col] = "settlement_date"
+
+    pmt = pay_df.rename(columns=merge_map)
+    wanted = ["id_number", "payment_stage", "amount", "status", "collection_date"]
+    if settlement_col is not None:
+        wanted.append("settlement_date")
+    pmt = pmt[[c for c in wanted if c in pmt.columns]].copy()
+
     pmt["id_number"] = pmt["id_number"].apply(normalize_id)
     pmt["payment_stage"] = pd.to_numeric(pmt["payment_stage"], errors="coerce")
     pmt["amount"] = pd.to_numeric(pmt["amount"], errors="coerce")
     pmt["collection_date"] = pd.to_datetime(pmt["collection_date"], errors="coerce")
+    if "settlement_date" in pmt.columns:
+        pmt["settlement_date"] = pd.to_datetime(pmt["settlement_date"], errors="coerce")
 
+    # ================================================================
+    # SMS LISTS — taken from the raw Payment Report
+    # ================================================================
     sms_cols = ["cell", "client_name", "id_number", "payment_stage", "amount", "status"]
     pmt_sms = pay_df.rename(columns={
         p_id_col: "id_number", p_name_col: "client_name", p_cell_col: "cell",
@@ -261,7 +304,7 @@ def build_report(fee_content, payment_content):
         pmt_sms["cell"] = pmt_sms["cell"].apply(normalize_phone)
     pmt_sms = pmt_sms.dropna(subset=["id_number", "payment_stage", "amount"])
 
-    # Failed SMS — Settled Period Total window
+    # Failed SMS — Settled Period Total window (last Friday → today)
     failed_keywords = ["FAILED", "FAIL", "DECLINED", "REJECTED", "DISPUTED",
                        "CLIENT CANCELLED MANDATE"]
     failed_mask = pmt_sms["status"].str.upper().str.contains("|".join(failed_keywords), na=False)
@@ -282,7 +325,9 @@ def build_report(fee_content, payment_content):
     failed_sms_df = latest_per_client(failed_pmt)[sms_cols].copy()
     tracking_sms_df = latest_per_client(tracking_pmt)[sms_cols].copy()
 
-    # Sale Not Submitted — from Fee Audit, all current-month rows
+    # ================================================================
+    # SALE NOT SUBMITTED & CLIENT CANCELLED MANDATE — from Fee Audit
+    # ================================================================
     sns_mask = fee_base["status"].astype(str).str.upper().str.contains("SALE NOT SUBMITTED", na=False)
     sns_df = fee_base[sns_mask].copy()
     if not sns_df.empty:
@@ -292,7 +337,6 @@ def build_report(fee_content, payment_content):
                 agg_cols[c] = "sum" if c == "amount" else "first"
         sns_df = sns_df.groupby("id_number").agg(agg_cols).reset_index()
 
-    # Client Cancelled Mandate
     cm_mask = fee_base["status"].astype(str).str.upper().str.contains("CLIENT CANCELLED MANDATE", na=False)
     cm_df = fee_base[cm_mask].copy()
     if not cm_df.empty:
@@ -302,10 +346,16 @@ def build_report(fee_content, payment_content):
                 agg_cols[c] = "sum" if c == "amount" else "first"
         cm_df = cm_df.groupby("id_number").agg(agg_cols).reset_index()
 
-    # ---- Metrics ----
+    # ================================================================
+    # MERGE — Fee Audit + Payment Status Report overlay
+    # ================================================================
+    merge_cols = ["id_number", "payment_stage", "status", "amount", "collection_date"]
+    if "settlement_date" in pmt.columns:
+        merge_cols.append("settlement_date")
+
     merged = fee_base.merge(
-        pmt[["id_number", "payment_stage", "status", "amount", "collection_date"]],
-        on=["id_number", "payment_stage"], how="left", suffixes=("", "_pmt")
+        pmt[merge_cols],
+        on=["id_number", "payment_stage"], how="left", suffixes=("", "_pmt"),
     )
     if "status_pmt" in merged.columns:
         merged["status"] = merged["status_pmt"].fillna(merged["status"])
@@ -313,30 +363,42 @@ def build_report(fee_content, payment_content):
         merged["amount"] = merged["amount_pmt"].fillna(merged["amount"])
     if "collection_date_pmt" in merged.columns:
         merged["collection_date"] = merged["collection_date_pmt"].fillna(merged["collection_date"])
+    if "settlement_date_pmt" in merged.columns:
+        merged["settlement_date"] = merged["settlement_date_pmt"]
+
+    # ================================================================
+    # EFFECTIVE SETTLEMENT DATE
+    # ================================================================
+    if "settlement_date" in merged.columns:
+        merged["effective_settlement_date"] = merged["settlement_date"].fillna(merged["collection_date"])
+    else:
+        merged["effective_settlement_date"] = merged["collection_date"]
 
     merged["status_upper"] = merged["status"].astype(str).str.upper()
     merged["payment_stage"] = pd.to_numeric(merged["payment_stage"], errors="coerce")
+
+    # ---- Clip the population to "not in the future" (matches app.py) ----
+    merged = merged[merged["collection_date"] <= today]
+    merged = merged[merged["effective_settlement_date"] <= today]
+
     stage12 = merged[merged["payment_stage"].isin([1, 2])].copy()
-    stage12 = stage12[stage12["collection_date"] <= today]
 
-    settled_mtd = stage12[(stage12["status_upper"] == "SETTLED") & (stage12["collection_date"] >= first_of_month)]
-    settled_cycle = stage12[(stage12["status_upper"] == "SETTLED") & (stage12["collection_date"] >= last_friday)]
-    failed_mtd = stage12[(stage12["status_upper"] == "FAILED") & (stage12["collection_date"] >= first_of_month)]
-    disputed_mtd = stage12[(stage12["status_upper"] == "DISPUTED") & (stage12["collection_date"] >= first_of_month)]
+    # ================================================================
+    # REVENUE (rank over ALL settled rows, then applied to stage 1/2)
+    # ================================================================
+    settled_all = merged[merged["status_upper"] == "SETTLED"].copy()
+    settled_all = settled_all.sort_values(["id_number", "effective_settlement_date"])
+    settled_all["settlement_rank"] = settled_all.groupby("id_number").cumcount() + 1
 
-    settled_mtd_v = settled_mtd["amount"].sum()
-    failed_mtd_v = failed_mtd["amount"].sum()
-    disputed_mtd_v = disputed_mtd["amount"].sum()
-
-    denom = settled_mtd_v + failed_mtd_v + disputed_mtd_v
-    success_rate = (settled_mtd_v / denom * 100) if denom > 0 else 0
-
-    settled_all = stage12[stage12["status_upper"] == "SETTLED"].copy()
-    settled_all = settled_all.sort_values(["id_number", "collection_date"])
-    settled_all["rank"] = settled_all.groupby("id_number").cumcount() + 1
+    stage12 = stage12.merge(
+        settled_all[["id_number", "effective_settlement_date", "amount", "status", "settlement_rank"]],
+        on=["id_number", "effective_settlement_date", "amount", "status"],
+        how="left",
+    )
 
     def calc_rev(row):
-        amt, rank = row["amount"], row["rank"]
+        amt = row["amount"]
+        rank = row["settlement_rank"]
         if pd.isna(rank):
             return 0
         if rank == 1:
@@ -346,18 +408,50 @@ def build_report(fee_content, payment_content):
         else:
             return min(amt * 0.05, 450)
 
-    settled_all["revenue"] = settled_all.apply(calc_rev, axis=1)
+    stage12["revenue"] = stage12.apply(calc_rev, axis=1)
 
-    revenue_cycle = settled_all[
-        settled_all["collection_date"] >= last_friday
-    ]["revenue"].sum()
+    # ================================================================
+    # METRICS
+    # ================================================================
+    # ---- Settled (uses effective_settlement_date — matches app.py) ----
+    settled_cycle = stage12[
+        (stage12["status_upper"] == "SETTLED") &
+        (stage12["effective_settlement_date"] >= last_friday)
+    ]
+    settled_mtd = stage12[
+        (stage12["status_upper"] == "SETTLED") &
+        (stage12["effective_settlement_date"] >= first_of_month)
+    ]
 
-    revenue_mtd = settled_all[
-        settled_all["collection_date"] >= first_of_month
-    ]["revenue"].sum()
+    settled_cycle_v = settled_cycle["amount"].sum()
+    settled_mtd_v = settled_mtd["amount"].sum()
 
+    revenue_cycle = settled_cycle["revenue"].sum()
+    revenue_mtd = settled_mtd["revenue"].sum()
     revenue_total = revenue_cycle
 
+    # ---- Failed / Disputed (uses collection_date — matches app.py) ----
+    failed_cycle = stage12[
+        (stage12["status_upper"] == "FAILED") &
+        (stage12["collection_date"] >= last_friday)
+    ]
+    failed_mtd = stage12[
+        (stage12["status_upper"] == "FAILED") &
+        (stage12["collection_date"] >= first_of_month)
+    ]
+    disputed_mtd = stage12[
+        (stage12["status_upper"] == "DISPUTED") &
+        (stage12["collection_date"] >= first_of_month)
+    ]
+
+    failed_cycle_v = failed_cycle["amount"].sum()
+    failed_mtd_v = failed_mtd["amount"].sum()
+    disputed_mtd_v = disputed_mtd["amount"].sum()
+
+    denom = settled_mtd_v + failed_mtd_v + disputed_mtd_v
+    success_rate = (settled_mtd_v / denom * 100) if denom > 0 else 0
+
+    # ---- Debits ----
     future_mask = fee_base["status"].astype(str).str.upper().str.contains("FUTURE", na=False)
     future_df = fee_base[future_mask & fee_base["payment_stage"].isin([1, 2])].dropna(subset=["collection_date"])
     tomorrow = today + timedelta(days=1)
@@ -377,20 +471,29 @@ def build_report(fee_content, payment_content):
     metrics = {
         "report_date": today.strftime("%Y-%m-%d"),
         "month": today.strftime("%B %Y"),
+        # Settled
         "settled_mtd_v": float(settled_mtd_v),
-        "settled_cycle_v": float(settled_cycle["amount"].sum()),
+        "settled_cycle_v": float(settled_cycle_v),
+        "settled_today_c": int(len(settled_mtd[settled_mtd["effective_settlement_date"] == today])),
+        # Failed
         "failed_mtd_v": float(failed_mtd_v),
-        "success_rate": float(success_rate),
+        "failed_cycle_v": float(failed_cycle_v),
+        "failed_cycle_c": int(failed_cycle["id_number"].nunique()) if not failed_cycle.empty else 0,
+        # Disputed
+        "disputed_v": float(disputed_mtd_v),
+        "disputed_c": int(disputed_mtd["id_number"].nunique()) if not disputed_mtd.empty else 0,
+        # Revenue
         "revenue_total": float(revenue_total),
         "revenue_cycle": float(revenue_cycle),
         "revenue_mtd": float(revenue_mtd),
+        # Success
+        "success_rate": float(success_rate),
+        # Debits
         "current_debits_v": float(current_debits_v),
         "next_debits_v": float(next_debits_v),
-        "settled_today_c": int(len(settled_mtd[settled_mtd["collection_date"] == today])),
+        # Tracking
         "tracking_c": int(tracking_pmt["id_number"].nunique()) if not tracking_pmt.empty else 0,
-        "failed_cycle_c": int(failed_mtd["id_number"].nunique()),
-        "disputed_v": float(disputed_mtd_v),
-        "disputed_c": int(disputed_mtd["id_number"].nunique()),
+        # Independent statuses
         "cancelled_mandate_v": float(cm_df["amount"].sum()) if not cm_df.empty else 0.0,
         "cancelled_mandate_c": int(cm_df["id_number"].nunique()) if not cm_df.empty else 0,
         "sale_not_submitted_v": float(sns_df["amount"].sum()) if not sns_df.empty else 0.0,
@@ -400,6 +503,9 @@ def build_report(fee_content, payment_content):
     return metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df
 
 
+# ----------------------------------------------------------------
+# EXCEL BUILDERS
+# ----------------------------------------------------------------
 def _reorder_sms(df):
     if df.empty:
         return df
@@ -415,8 +521,10 @@ def build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df):
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         dashboard = pd.DataFrame({
             "Metric": [
-                "Settled — 7-Day Cycle", "Settled MTD", "Failed — 7-Day Cycle", "Failed MTD",
-                "Disputed MTD", "Client Cancelled Mandate", "Sale Not Submitted",
+                "Settled — 7-Day Cycle", "Settled MTD",
+                "Failed — 7-Day Cycle", "Failed MTD",
+                "Disputed MTD",
+                "Client Cancelled Mandate", "Sale Not Submitted",
                 "Revenue — 7-Day Cycle", "Revenue — Month to Date",
                 "Success Rate",
                 "Curr Month Debits", "Next Month Debits",
@@ -425,7 +533,7 @@ def build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df):
             "Value": [
                 f"R {metrics['settled_cycle_v']:,.2f}",
                 f"R {metrics['settled_mtd_v']:,.2f}",
-                f"R {metrics['failed_mtd_v']:,.2f}",  # 7-day failed value uses same base for now
+                f"R {metrics['failed_cycle_v']:,.2f}",
                 f"R {metrics['failed_mtd_v']:,.2f}",
                 f"R {metrics['disputed_v']:,.2f}",
                 f"R {metrics['cancelled_mandate_v']:,.2f}",
@@ -466,6 +574,9 @@ def build_single_sheet_excel(df, sheet_name):
     return output
 
 
+# ----------------------------------------------------------------
+# MAIN
+# ----------------------------------------------------------------
 def main():
     folder_id = os.getenv("FOLDER_ID")
     service = get_drive_service()
@@ -480,6 +591,7 @@ def main():
     print(f"Failed SMS list size: {len(failed_sms_df)} clients")
     print(f"Intracking SMS list size: {len(tracking_sms_df)} clients")
 
+    # ---- metrics_history.csv ----
     try:
         history_bytes = download_file(service, folder_id, "metrics_history.csv")
         history_df = pd.read_csv(history_bytes)
@@ -500,27 +612,30 @@ def main():
     upload_or_update(service, folder_id, "metrics_history.csv", csv_bytes, "text/csv")
     print("Updated metrics_history.csv on Drive.")
 
+    # ---- Full Excel ----
     excel_bytes = build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df)
     excel_bytes.seek(0)
     upload_or_update(
         service, folder_id, "Debt_Review_Report.xlsx", excel_bytes,
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     print("Uploaded Debt_Review_Report.xlsx to Drive.")
 
+    # ---- Failed SMS standalone ----
     failed_sms_bytes = build_single_sheet_excel(failed_sms_df, "Failed SMS")
     failed_sms_bytes.seek(0)
     upload_or_update(
         service, folder_id, "Failed_SMS.xlsx", failed_sms_bytes,
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     print("Uploaded Failed_SMS.xlsx to Drive.")
 
+    # ---- Intracking SMS standalone ----
     tracking_sms_bytes = build_single_sheet_excel(tracking_sms_df, "Intracking SMS")
     tracking_sms_bytes.seek(0)
     upload_or_update(
         service, folder_id, "Intracking_SMS.xlsx", tracking_sms_bytes,
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     print("Uploaded Intracking_SMS.xlsx to Drive.")
 
