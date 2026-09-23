@@ -1,11 +1,10 @@
 # ================================================================
-# 🔄 REFRESH METRICS + EXCEL REPORT — Headless computation & Drive
+# REFRESH METRICS + EXCEL REPORT — headless run, uploads to Drive
 # ================================================================
 
 import os
 import io
 import json
-import base64
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
@@ -13,11 +12,11 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
-# ================================================================
-# 🆔 ID & PHONE NORMALIZERS
-# ================================================================
+
+# ----------------------------------------------------------------
+# ID & PHONE NORMALIZERS
+# ----------------------------------------------------------------
 def normalize_id(val):
-    """Convert any ID value to a clean integer-style string."""
     if pd.isna(val):
         return ""
     if isinstance(val, (int, np.integer)):
@@ -31,19 +30,17 @@ def normalize_id(val):
         s = s[:-2]
     return s
 
+
 def normalize_phone(val):
-    """Convert a phone number to a clean string (preserves leading zeros)."""
     if pd.isna(val):
         return ""
     if isinstance(val, (int, np.integer)):
         return str(int(val))
     if isinstance(val, (float, np.floating)):
-        # Format as integer if it's a whole number, avoiding scientific notation
         if float(val).is_integer():
             return str(int(val))
         return str(val)
     s = str(val).strip()
-    # Handle Excel numbers like "7.207528e+09" or "720752772.0"
     try:
         f = float(s)
         if f.is_integer():
@@ -54,9 +51,10 @@ def normalize_phone(val):
         s = s[:-2]
     return s
 
-# ================================================================
-# 🔐 GOOGLE DRIVE HELPERS
-# ================================================================
+
+# ----------------------------------------------------------------
+# GOOGLE DRIVE HELPERS
+# ----------------------------------------------------------------
 def get_drive_service():
     creds_info = {
         "type": "service_account",
@@ -67,11 +65,15 @@ def get_drive_service():
         "client_id": os.getenv("CLIENT_ID"),
         "auth_uri": os.getenv("AUTH_URI", "https://accounts.google.com/o/oauth2/auth"),
         "token_uri": os.getenv("TOKEN_URI", "https://oauth2.googleapis.com/token"),
-        "auth_provider_x509_cert_url": os.getenv("AUTH_PROVIDER_X509_CERT_URL", "https://www.googleapis.com/oauth2/v1/certs"),
+        "auth_provider_x509_cert_url": os.getenv(
+            "AUTH_PROVIDER_X509_CERT_URL",
+            "https://www.googleapis.com/oauth2/v1/certs",
+        ),
         "client_x509_cert_url": os.getenv("CLIENT_X509_CERT_URL"),
     }
     creds = service_account.Credentials.from_service_account_info(creds_info)
     return build("drive", "v3", credentials=creds)
+
 
 def download_file(service, folder_id, file_name):
     query = f"'{folder_id}' in parents and name = '{file_name}' and trashed = false"
@@ -79,8 +81,7 @@ def download_file(service, folder_id, file_name):
     files = results.get("files", [])
     if not files:
         raise Exception(f"File '{file_name}' not found in folder.")
-    file_id = files[0]["id"]
-    request = service.files().get_media(fileId=file_id)
+    request = service.files().get_media(fileId=files[0]["id"])
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
     done = False
@@ -88,6 +89,7 @@ def download_file(service, folder_id, file_name):
         _, done = downloader.next_chunk()
     fh.seek(0)
     return fh
+
 
 def upload_or_update(service, folder_id, file_name, content_bytes, mime_type="text/csv"):
     query = f"'{folder_id}' in parents and name = '{file_name}' and trashed = false"
@@ -99,12 +101,13 @@ def upload_or_update(service, folder_id, file_name, content_bytes, mime_type="te
     else:
         service.files().create(
             body={"name": file_name, "parents": [folder_id]},
-            media_body=media
+            media_body=media,
         ).execute()
 
-# ================================================================
-# 🔍 COLUMN DETECTION
-# ================================================================
+
+# ----------------------------------------------------------------
+# COLUMN DETECTION
+# ----------------------------------------------------------------
 def find_columns(df):
     status_col = None
     for col in df.columns:
@@ -119,7 +122,6 @@ def find_columns(df):
     if status_col is None:
         status_col = df.columns[-1]
 
-    # Prefer exact "ID NUMBER" over "APPLICANT NUMBER"
     id_col = None
     for col in df.columns:
         if str(col).strip().upper() == "ID NUMBER":
@@ -166,7 +168,6 @@ def find_columns(df):
             name_col = col
             break
 
-    # ✅ FIX: Prefer exact "CELL" match first, then fallback
     cell_col = None
     for col in df.columns:
         if str(col).strip().upper() == "CELL":
@@ -185,9 +186,10 @@ def find_columns(df):
 
     return status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col
 
-# ================================================================
-# 🧮 BUILD REPORT — Computes metrics and lists
-# ================================================================
+
+# ----------------------------------------------------------------
+# BUILD REPORT
+# ----------------------------------------------------------------
 def build_report(fee_content, payment_content):
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     first_of_month = today.replace(day=1)
@@ -208,7 +210,7 @@ def build_report(fee_content, payment_content):
     if current_sheet is None:
         current_sheet = all_sheets[0]
 
-    # ---- Read Fee Audit ----
+    # ---- Fee Audit ----
     fee_df = pd.read_excel(fee_content, sheet_name=current_sheet)
     s_col, id_col, amt_col, stage_col, date_col, name_col, cell_col = find_columns(fee_df)
 
@@ -240,7 +242,7 @@ def build_report(fee_content, payment_content):
     keep = status_up.str.contains("CLIENT CANCELLED MANDATE", na=False)
     fee_base = fee_base[~(cancel & ~keep)].copy()
 
-    # ---- Read Payment Status Report ----
+    # ---- Payment Status Report ----
     try:
         pay_df = pd.read_excel(payment_content, sheet_name="Details", header=3)
     except Exception:
@@ -250,31 +252,31 @@ def build_report(fee_content, payment_content):
 
     pmt = pay_df.rename(columns={
         p_id_col: "id_number", p_stage_col: "payment_stage", p_amt_col: "amount",
-        p_s_col: "status", p_date_col: "collection_date"
+        p_s_col: "status", p_date_col: "collection_date",
     })
     pmt["id_number"] = pmt["id_number"].apply(normalize_id)
     pmt["payment_stage"] = pd.to_numeric(pmt["payment_stage"], errors="coerce")
     pmt["amount"] = pd.to_numeric(pmt["amount"], errors="coerce")
     pmt["collection_date"] = pd.to_datetime(pmt["collection_date"], errors="coerce")
 
-    # ---- SMS lists (from Payment Report) ----
-    sms_cols = ["id_number", "client_name", "cell", "payment_stage", "amount", "status"]
+    # ---- SMS lists ----
+    sms_cols = ["cell", "client_name", "id_number", "payment_stage", "amount", "status"]
     pmt_sms = pay_df.rename(columns={
         p_id_col: "id_number", p_name_col: "client_name", p_cell_col: "cell",
         p_stage_col: "payment_stage", p_amt_col: "amount",
-        p_s_col: "status", p_date_col: "collection_date"
+        p_s_col: "status", p_date_col: "collection_date",
     })
     pmt_sms["payment_stage"] = pd.to_numeric(pmt_sms["payment_stage"], errors="coerce")
     pmt_sms["amount"] = pd.to_numeric(pmt_sms["amount"], errors="coerce")
     pmt_sms["collection_date"] = pd.to_datetime(pmt_sms["collection_date"], errors="coerce")
     pmt_sms["id_number"] = pmt_sms["id_number"].apply(normalize_id)
-    # ✅ FIX: Normalize Cell numbers so they display cleanly
     if "cell" in pmt_sms.columns:
         pmt_sms["cell"] = pmt_sms["cell"].apply(normalize_phone)
     pmt_sms = pmt_sms.dropna(subset=["id_number", "payment_stage", "amount"])
 
-    # ---- Failed SMS list — only within Settled Period Total window ----
-    failed_keywords = ["FAILED", "FAIL", "DECLINED", "REJECTED", "DISPUTED", "CLIENT CANCELLED MANDATE"]
+    # Failed / Disputed — within Settled Period Total window (last Friday → today)
+    failed_keywords = ["FAILED", "FAIL", "DECLINED", "REJECTED", "DISPUTED",
+                       "CLIENT CANCELLED MANDATE"]
     failed_mask = pmt_sms["status"].str.upper().str.contains("|".join(failed_keywords), na=False)
     failed_pmt = pmt_sms[failed_mask].copy()
     failed_pmt = failed_pmt[
@@ -293,9 +295,9 @@ def build_report(fee_content, payment_content):
     failed_sms_df = latest_per_client(failed_pmt)[sms_cols].copy()
     tracking_sms_df = latest_per_client(tracking_pmt)[sms_cols].copy()
 
-    # ---- Sale Not Submitted — from Fee Audit ----
-    sale_not_submitted_mask = fee_base["status"].astype(str).str.upper().str.contains("SALE NOT SUBMITTED", na=False)
-    sns_df = fee_base[sale_not_submitted_mask].copy()
+    # Sale Not Submitted — from Fee Audit, all rows for the current month
+    sns_mask = fee_base["status"].astype(str).str.upper().str.contains("SALE NOT SUBMITTED", na=False)
+    sns_df = fee_base[sns_mask].copy()
     if not sns_df.empty:
         agg_cols = {}
         for c in ["client_name", "cell", "payment_stage", "amount", "status"]:
@@ -303,7 +305,7 @@ def build_report(fee_content, payment_content):
                 agg_cols[c] = "sum" if c == "amount" else "first"
         sns_df = sns_df.groupby("id_number").agg(agg_cols).reset_index()
 
-    # ---- Client Cancelled Mandate — from Fee Audit ----
+    # Client Cancelled Mandate — from Fee Audit
     cm_mask = fee_base["status"].astype(str).str.upper().str.contains("CLIENT CANCELLED MANDATE", na=False)
     cm_df = fee_base[cm_mask].copy()
     if not cm_df.empty:
@@ -347,10 +349,14 @@ def build_report(fee_content, payment_content):
 
     def calc_rev(row):
         amt, rank = row["amount"], row["rank"]
-        if pd.isna(rank): return 0
-        if rank == 1: return amt if amt < 3000 else min(amt, 8000)
-        elif rank == 2: return min(amt * 1.5, 3000) if amt < 3000 else min(amt, 8000)
-        else: return min(amt * 0.05, 450)
+        if pd.isna(rank):
+            return 0
+        if rank == 1:
+            return amt if amt < 3000 else min(amt, 8000)
+        elif rank == 2:
+            return min(amt * 1.5, 3000) if amt < 3000 else min(amt, 8000)
+        else:
+            return min(amt * 0.05, 450)
 
     settled_all["revenue"] = settled_all.apply(calc_rev, axis=1)
     revenue_total = settled_all[settled_all["collection_date"] >= first_of_month]["revenue"].sum()
@@ -393,9 +399,21 @@ def build_report(fee_content, payment_content):
 
     return metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df
 
-# ================================================================
-# 📊 EXCEL BUILDERS
-# ================================================================
+
+# ----------------------------------------------------------------
+# EXCEL BUILDERS
+# ----------------------------------------------------------------
+def _reorder_sms(df):
+    """Return df with columns in order Cell, Name, ID NUMBER, Stage, Amount, Status."""
+    if df.empty:
+        return df
+    out = df.rename(columns={
+        "id_number": "ID NUMBER", "client_name": "Name", "cell": "Cell",
+        "payment_stage": "Stage", "amount": "Amount", "status": "Status",
+    })
+    return out[["Cell", "Name", "ID NUMBER", "Stage", "Amount", "Status"]]
+
+
 def build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -423,57 +441,49 @@ def build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df):
         })
         dashboard.to_excel(writer, sheet_name="Dashboard", index=False)
 
-        def prep(df):
-            if df.empty:
-                return df
-            return df.rename(columns={
-                "id_number": "ID NUMBER", "client_name": "Name", "cell": "Cell",
-                "payment_stage": "Stage", "amount": "Amount", "status": "Status"
-            })
-
         if not failed_sms_df.empty:
-            prep(failed_sms_df).to_excel(writer, sheet_name="Failed SMS", index=False)
+            _reorder_sms(failed_sms_df).to_excel(writer, sheet_name="Failed SMS", index=False)
         if not tracking_sms_df.empty:
-            prep(tracking_sms_df).to_excel(writer, sheet_name="Intracking SMS", index=False)
+            _reorder_sms(tracking_sms_df).to_excel(writer, sheet_name="Intracking SMS", index=False)
         if not sns_df.empty:
-            prep(sns_df).to_excel(writer, sheet_name="Sale Not Submitted", index=False)
+            _reorder_sms(sns_df).to_excel(writer, sheet_name="Sale Not Submitted", index=False)
         if not cm_df.empty:
-            prep(cm_df).to_excel(writer, sheet_name="Client Cancelled Mandate", index=False)
+            _reorder_sms(cm_df).to_excel(writer, sheet_name="Client Cancelled Mandate", index=False)
 
     output.seek(0)
     return output
+
 
 def build_single_sheet_excel(df, sheet_name):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         if df.empty:
-            pd.DataFrame({"Message": ["No records for this period"]}).to_excel(writer, sheet_name=sheet_name, index=False)
+            pd.DataFrame({"Message": ["No records for this period"]}).to_excel(
+                writer, sheet_name=sheet_name, index=False)
         else:
-            out_df = df.rename(columns={
-                "id_number": "ID NUMBER", "client_name": "Name", "cell": "Cell",
-                "payment_stage": "Stage", "amount": "Amount", "status": "Status"
-            })
-            out_df.to_excel(writer, sheet_name=sheet_name, index=False)
+            _reorder_sms(df).to_excel(writer, sheet_name=sheet_name, index=False)
     output.seek(0)
     return output
 
-# ================================================================
-# 🚀 MAIN
-# ================================================================
+
+# ----------------------------------------------------------------
+# MAIN
+# ----------------------------------------------------------------
 def main():
     folder_id = os.getenv("FOLDER_ID")
     service = get_drive_service()
 
-    print("📥 Downloading source files from Google Drive...")
+    print("Downloading source files from Google Drive...")
     fee_content = download_file(service, folder_id, "Monthly Fees Audit.xlsx")
     payment_content = download_file(service, folder_id, "Payment Status Report.xlsx")
 
-    print("🧮 Computing metrics + building reports...")
+    print("Computing metrics + building reports...")
     metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df = build_report(fee_content, payment_content)
     print("Computed:", json.dumps(metrics, indent=2))
-    print(f"📊 Failed SMS list size (this period): {len(failed_sms_df)} clients")
-    print(f"📊 Intracking SMS list size: {len(tracking_sms_df)} clients")
+    print(f"Failed SMS list size: {len(failed_sms_df)} clients")
+    print(f"Intracking SMS list size: {len(tracking_sms_df)} clients")
 
+    # ---- metrics_history.csv ----
     try:
         history_bytes = download_file(service, folder_id, "metrics_history.csv")
         history_df = pd.read_csv(history_bytes)
@@ -492,34 +502,35 @@ def main():
 
     csv_bytes = io.BytesIO(history_df.to_csv(index=False).encode("utf-8"))
     upload_or_update(service, folder_id, "metrics_history.csv", csv_bytes, "text/csv")
-    print("✅ Updated metrics_history.csv on Drive.")
+    print("Updated metrics_history.csv on Drive.")
 
-    print("📊 Building full Excel report...")
+    # ---- Full Excel report ----
     excel_bytes = build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df)
     excel_bytes.seek(0)
     upload_or_update(
         service, folder_id, "Debt_Review_Report.xlsx", excel_bytes,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    print("✅ Uploaded Debt_Review_Report.xlsx to Drive.")
+    print("Uploaded Debt_Review_Report.xlsx to Drive.")
 
-    print("📊 Building Failed SMS-only Excel...")
+    # ---- Failed SMS standalone ----
     failed_sms_bytes = build_single_sheet_excel(failed_sms_df, "Failed SMS")
     failed_sms_bytes.seek(0)
     upload_or_update(
         service, folder_id, "Failed_SMS.xlsx", failed_sms_bytes,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    print("✅ Uploaded Failed_SMS.xlsx to Drive.")
+    print("Uploaded Failed_SMS.xlsx to Drive.")
 
-    print("📊 Building Intracking SMS-only Excel...")
+    # ---- Intracking SMS standalone ----
     tracking_sms_bytes = build_single_sheet_excel(tracking_sms_df, "Intracking SMS")
     tracking_sms_bytes.seek(0)
     upload_or_update(
         service, folder_id, "Intracking_SMS.xlsx", tracking_sms_bytes,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    print("✅ Uploaded Intracking_SMS.xlsx to Drive.")
+    print("Uploaded Intracking_SMS.xlsx to Drive.")
+
 
 if __name__ == "__main__":
     main()
