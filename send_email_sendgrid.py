@@ -22,14 +22,17 @@ FOLDER_ID        = os.getenv("FOLDER_ID")
 
 DEFAULT_METRICS = {
     "settled_today_v": 0, "settled_today_c": 0,
-    "settled_cycle_v": 0, "settled_cycle_c": 0,
-    "success_rate": 0,
-    "tracking_v": 0, "tracking_c": 0,
-    "failed_cycle_v": 0, "failed_cycle_c": 0,
-    "failed_mtd_v": 0, "failed_mtd_c": 0,
+    "settled_mtd_v":   0, "settled_mtd_c":   0,
+    "success_rate":    0,
+    "tracking_v":      0, "tracking_c":      0,
+    "failed_cycle_v":  0, "failed_cycle_c":  0,
+    "failed_mtd_v":    0, "failed_mtd_c":    0,
 }
 
 
+# ----------------------------------------------------------------
+# GOOGLE DRIVE
+# ----------------------------------------------------------------
 def get_drive_service():
     creds_info = {
         "type": "service_account",
@@ -76,8 +79,8 @@ def get_metrics():
             return {
                 "settled_today_v": float(latest.get("settled_today_v", 0) or 0),
                 "settled_today_c": int(float(latest.get("settled_today_c", 0) or 0)),
-                "settled_cycle_v": float(latest.get("settled_cycle_v", 0) or 0),
-                "settled_cycle_c": int(float(latest.get("settled_cycle_c", 0) or 0)),
+                "settled_mtd_v":   float(latest.get("settled_mtd_v", 0) or 0),
+                "settled_mtd_c":   int(float(latest.get("settled_mtd_c", 0) or 0)),
                 "success_rate":    float(latest.get("success_rate", 0) or 0),
                 "tracking_v":      float(latest.get("tracking_v", 0) or 0),
                 "tracking_c":      int(float(latest.get("tracking_c", 0) or 0)),
@@ -91,6 +94,9 @@ def get_metrics():
     return DEFAULT_METRICS
 
 
+# ----------------------------------------------------------------
+# HTML BODIES
+# ----------------------------------------------------------------
 def main_html(metrics):
     today = datetime.now().strftime("%d %B %Y")
 
@@ -114,8 +120,8 @@ def main_html(metrics):
     rows = (
         row("Settled Today", f"R {metrics['settled_today_v']:,.2f}",
             f"{metrics['settled_today_c']} clients") +
-        row("Settled Period", f"R {metrics['settled_cycle_v']:,.2f}",
-            f"{metrics['settled_cycle_c']} clients") +
+        row("Settled Period Total", f"R {metrics['settled_mtd_v']:,.2f}",
+            f"{metrics['settled_mtd_c']} clients") +
         row("Success Rate", f"{metrics['success_rate']:.1f}%") +
         row("Intracking", f"R {metrics['tracking_v']:,.2f}",
             f"{metrics['tracking_c']} clients") +
@@ -208,6 +214,9 @@ def sms_html():
     """
 
 
+# ----------------------------------------------------------------
+# SEND HELPERS
+# ----------------------------------------------------------------
 def _post_sendgrid(payload, label):
     headers = {
         "Authorization": f"Bearer {SENDGRID_API_KEY}",
