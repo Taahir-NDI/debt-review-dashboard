@@ -2,12 +2,15 @@ name: Send Email
 
 on:
   workflow_run:
-    workflows: ["Refresh Metrics"]
+    workflows: ["Refresh Metrics"]    # must match name: above exactly
     types: [completed]
-  workflow_dispatch:
+  workflow_dispatch:                   # for manual testing
 
 jobs:
   send-email:
+    # Runs on:
+    #   - a manual run of this workflow, OR
+    #   - any Refresh Metrics run that completed successfully
     if: >
       ${{
         github.event_name == 'workflow_dispatch' ||
@@ -29,24 +32,18 @@ jobs:
       - name: Send email
         run: python send_email_sendgrid.py
         env:
-          # SMTP (SendGrid)
-          SMTP_SERVER:                    ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT:                      ${{ secrets.SMTP_PORT }}
-          SMTP_USER:                      ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD:                  ${{ secrets.SMTP_PASSWORD }}
-          EMAIL_FROM:                     ${{ secrets.EMAIL_FROM }}
-          EMAIL_TO:                       ${{ secrets.EMAIL_TO }}
-          TO_EMAIL_SMS:                   ${{ secrets.TO_EMAIL_SMS }}
-
-          # Google Drive (service account)
-          PROJECT_ID:                     ${{ secrets.PROJECT_ID }}
-          PRIVATE_KEY_ID:                 ${{ secrets.PRIVATE_KEY_ID }}
-          PRIVATE_KEY:                    ${{ secrets.PRIVATE_KEY }}
-          CLIENT_EMAIL:                   ${{ secrets.CLIENT_EMAIL }}
-          CLIENT_ID:                      ${{ secrets.CLIENT_ID }}
-          AUTH_URI:                       ${{ secrets.AUTH_URI }}
-          TOKEN_URI:                      ${{ secrets.TOKEN_URI }}
-          AUTH_PROVIDER_X509_CERT_URL:    ${{ secrets.AUTH_PROVIDER_X509_CERT_URL }}
-          CLIENT_X509_CERT_URL:           ${{ secrets.CLIENT_X509_CERT_URL }}
-          UNIVERSE_DOMAIN:                ${{ secrets.UNIVERSE_DOMAIN }}
-          FOLDER_ID:                      ${{ secrets.FOLDER_ID }}
+          SENDGRID_API_KEY:              ${{ secrets.SENDGRID_API_KEY }}
+          FROM_EMAIL:                    ${{ secrets.FROM_EMAIL }}
+          TO_EMAIL:                      ${{ secrets.TO_EMAIL }}
+          TO_EMAIL_SMS:                  ${{ secrets.TO_EMAIL_SMS }}
+          DASHBOARD_URL:                 ${{ secrets.DASHBOARD_URL }}
+          FOLDER_ID:                     ${{ secrets.FOLDER_ID }}
+          PROJECT_ID:                    ${{ secrets.PROJECT_ID }}
+          PRIVATE_KEY_ID:                ${{ secrets.PRIVATE_KEY_ID }}
+          PRIVATE_KEY:                   ${{ secrets.PRIVATE_KEY }}
+          CLIENT_EMAIL:                  ${{ secrets.CLIENT_EMAIL }}
+          CLIENT_ID:                     ${{ secrets.CLIENT_ID }}
+          AUTH_URI:                      ${{ secrets.AUTH_URI }}
+          TOKEN_URI:                     ${{ secrets.TOKEN_URI }}
+          AUTH_PROVIDER_X509_CERT_URL:   ${{ secrets.AUTH_PROVIDER_X509_CERT_URL }}
+          CLIENT_X509_CERT_URL:          ${{ secrets.CLIENT_X509_CERT_URL }}
