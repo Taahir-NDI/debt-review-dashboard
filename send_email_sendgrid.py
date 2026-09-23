@@ -13,9 +13,6 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 
-# ----------------------------------------------------------------
-# CONFIG
-# ----------------------------------------------------------------
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 FROM_EMAIL       = os.getenv("FROM_EMAIL")
 TO_EMAIL         = os.getenv("TO_EMAIL")
@@ -92,7 +89,7 @@ def get_metrics():
 
 
 # ----------------------------------------------------------------
-# HTML TEMPLATES
+# HTML BODIES
 # ----------------------------------------------------------------
 def main_html(metrics):
     today = datetime.now().strftime("%d %B %Y")
