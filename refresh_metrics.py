@@ -188,7 +188,6 @@ def find_columns(df):
 
 
 def find_settlement_col(df):
-    """Locate a 'SETTLEMENT DATE' column, if present."""
     for col in df.columns:
         if "SETTLEMENT DATE" in str(col).upper():
             return col
@@ -219,7 +218,7 @@ def build_report(fee_content, payment_content):
         current_sheet = all_sheets[0]
 
     # ================================================================
-    # FEE AUDIT — base population (LEFT side of merge)
+    # FEE AUDIT — the sole source for the email preview metrics
     # ================================================================
     fee_df = pd.read_excel(fee_content, sheet_name=current_sheet)
     s_col, id_col, amt_col, stage_col, date_col, name_col, cell_col = find_columns(fee_df)
@@ -247,13 +246,13 @@ def build_report(fee_content, payment_content):
     fee_base["collection_date"] = pd.to_datetime(fee_base["collection_date"], errors="coerce")
     fee_base = fee_base.dropna(subset=["id_number", "payment_stage"])
 
-    status_up = fee_base["status"].astype(str).str.upper()
-    cancel = status_up.str.contains("CANCELLED", na=False)
-    keep = status_up.str.contains("CLIENT CANCELLED MANDATE", na=False)
+    status_up_fee = fee_base["status"].astype(str).str.upper()
+    cancel = status_up_fee.str.contains("CANCELLED", na=False)
+    keep = status_up_fee.str.contains("CLIENT CANCELLED MANDATE", na=False)
     fee_base = fee_base[~(cancel & ~keep)].copy()
 
     # ================================================================
-    # PAYMENT STATUS REPORT — supplies settlement_date + fallbacks
+    # PAYMENT STATUS REPORT — needed for the merge (revenue, etc.)
     # ================================================================
     try:
         pay_df = pd.read_excel(payment_content, sheet_name="Details", header=3)
@@ -345,8 +344,7 @@ def build_report(fee_content, payment_content):
         cm_df = cm_df.groupby("id_number").agg(agg_cols).reset_index()
 
     # ================================================================
-    # MERGE — Fee Audit is PRIMARY, Payment Report supplies fallbacks
-    # and settlement_date. Matches app.py exactly.
+    # MERGE — used only for the Excel Dashboard tab extras
     # ================================================================
     merged = fee_base.merge(pmt, on=["id_number", "payment_stage"], how="left")
 
@@ -366,7 +364,6 @@ def build_report(fee_content, payment_content):
 
     stage12 = merged[merged["payment_stage"].isin([1, 2])].copy()
 
-    # Revenue rank — computed over ALL settled rows, applied back to stage 1/2
     settled_all = merged[merged["status_upper"] == "SETTLED"].copy()
     settled_all = settled_all.sort_values(["id_number", "effective_settlement_date"])
     settled_all["settlement_rank"] = settled_all.groupby("id_number").cumcount() + 1
@@ -391,44 +388,24 @@ def build_report(fee_content, payment_content):
 
     stage12["revenue"] = stage12.apply(calc_rev, axis=1)
 
-    # ================================================================
-    # METRICS — filters mirror app.py exactly
-    # ================================================================
+    # Excel-only extras (kept from merged data)
     settled_cycle = stage12[
         (stage12["status_upper"] == "SETTLED") &
         (stage12["effective_settlement_date"] >= last_friday)
     ]
-    settled_mtd = stage12[
+    revenue_cycle = settled_cycle["revenue"].sum()
+
+    settled_mtd_merged = stage12[
         (stage12["status_upper"] == "SETTLED") &
         (stage12["effective_settlement_date"] >= first_of_month)
     ]
-
-    settled_cycle_v = settled_cycle["amount"].sum()
-    settled_mtd_v = settled_mtd["amount"].sum()
-
-    revenue_cycle = settled_cycle["revenue"].sum()
-    revenue_mtd = settled_mtd["revenue"].sum()
+    revenue_mtd = settled_mtd_merged["revenue"].sum()
     revenue_total = revenue_cycle
 
-    failed_cycle = stage12[
-        (stage12["status_upper"] == "FAILED") &
-        (stage12["collection_date"] >= last_friday)
-    ]
-    failed_mtd = stage12[
-        (stage12["status_upper"] == "FAILED") &
-        (stage12["collection_date"] >= first_of_month)
-    ]
     disputed_mtd = stage12[
         (stage12["status_upper"] == "DISPUTED") &
         (stage12["collection_date"] >= first_of_month)
     ]
-
-    failed_cycle_v = failed_cycle["amount"].sum()
-    failed_mtd_v = failed_mtd["amount"].sum()
-    disputed_mtd_v = disputed_mtd["amount"].sum()
-
-    denom = settled_mtd_v + failed_mtd_v + disputed_mtd_v
-    success_rate = (settled_mtd_v / denom * 100) if denom > 0 else 0
 
     future_mask = fee_base["status"].astype(str).str.upper().str.contains("FUTURE", na=False)
     future_df = fee_base[future_mask & fee_base["payment_stage"].isin([1, 2])].dropna(subset=["collection_date"])
@@ -446,43 +423,77 @@ def build_report(fee_content, payment_content):
         (future_df["collection_date"] <= last_of_next)
     ]["amount"].sum()
 
-    # ---- Settled Today + counts (email preview fields) ----
-    settled_today = settled_mtd[settled_mtd["effective_settlement_date"] == today]
-    settled_today_v = settled_today["amount"].sum()
-    settled_today_c = len(settled_today)
+    # ================================================================
+    # EMAIL PREVIEW METRICS — computed from FEE AUDIT ONLY
+    # ================================================================
+    fee_status_upper = fee_base["status"].astype(str).str.upper()
 
-    settled_cycle_c = len(settled_cycle)
+    fee_settled  = fee_base[fee_status_upper == "SETTLED"]
+    fee_failed   = fee_base[fee_status_upper == "FAILED"]
+    fee_disputed = fee_base[fee_status_upper == "DISPUTED"]
+    fee_tracking = fee_base[fee_status_upper.str.contains("TRACKING|INTRACKING", na=False)]
 
-    tracking_v = tracking_pmt["amount"].sum() if not tracking_pmt.empty else 0
+    # 1. Settled Today — collection_date == today
+    settled_today = fee_settled[fee_settled["collection_date"] == today]
+    settled_today_v = float(settled_today["amount"].sum())
+    settled_today_c = int(settled_today["id_number"].nunique())
 
-    failed_mtd_c = int(failed_mtd["id_number"].nunique()) if not failed_mtd.empty else 0
+    # 2. Settled Period Total — collection_date >= first_of_month
+    settled_preview = fee_settled[fee_settled["collection_date"] >= first_of_month]
+    settled_preview_v = float(settled_preview["amount"].sum())
+    settled_preview_c = int(settled_preview["id_number"].nunique())
+
+    # 3. Success Rate — MTD window (Settled ÷ (Settled + Failed + Disputed))
+    failed_preview = fee_failed[fee_failed["collection_date"] >= first_of_month]
+    failed_preview_v = float(failed_preview["amount"].sum())
+    failed_preview_c = int(failed_preview["id_number"].nunique())
+
+    disputed_preview = fee_disputed[fee_disputed["collection_date"] >= first_of_month]
+    disputed_preview_v = float(disputed_preview["amount"].sum())
+
+    denom_preview = settled_preview_v + failed_preview_v + disputed_preview_v
+    success_rate_preview = (settled_preview_v / denom_preview * 100) if denom_preview > 0 else 0.0
+
+    # 4. Intracking
+    tracking_preview_v = float(fee_tracking["amount"].sum()) if not fee_tracking.empty else 0.0
+    tracking_preview_c = int(fee_tracking["id_number"].nunique()) if not fee_tracking.empty else 0
+
+    # 5. Failed Period — collection_date >= last_friday
+    failed_cycle_preview = fee_failed[fee_failed["collection_date"] >= last_friday]
+    failed_cycle_preview_v = float(failed_cycle_preview["amount"].sum())
+    failed_cycle_preview_c = int(failed_cycle_preview["id_number"].nunique())
+
+    # 6. Failed MTD — reuse failed_preview from above
+    failed_mtd_preview_v = failed_preview_v
+    failed_mtd_preview_c = failed_preview_c
 
     metrics = {
         "report_date": today.strftime("%Y-%m-%d"),
         "month": today.strftime("%B %Y"),
 
-        # ---- Dashboard-matched KPIs (exact fields the email preview shows) ----
-        "settled_today_v": float(settled_today_v),
-        "settled_today_c": int(settled_today_c),
+        # ---- EMAIL PREVIEW FIELDS (Fee Audit only) ----
+        "settled_today_v": settled_today_v,
+        "settled_today_c": settled_today_c,
 
-        "settled_cycle_v": float(settled_cycle_v),
-        "settled_cycle_c": int(settled_cycle_c),
+        "settled_mtd_v": settled_preview_v,
+        "settled_mtd_c": settled_preview_c,
 
-        "success_rate": float(success_rate),
+        "success_rate": success_rate_preview,
 
-        "tracking_v": float(tracking_v),
-        "tracking_c": int(tracking_pmt["id_number"].nunique()) if not tracking_pmt.empty else 0,
+        "tracking_v": tracking_preview_v,
+        "tracking_c": tracking_preview_c,
 
-        "failed_cycle_v": float(failed_cycle_v),
-        "failed_cycle_c": int(failed_cycle["id_number"].nunique()) if not failed_cycle.empty else 0,
+        "failed_cycle_v": failed_cycle_preview_v,
+        "failed_cycle_c": failed_cycle_preview_c,
 
-        "failed_mtd_v": float(failed_mtd_v),
-        "failed_mtd_c": int(failed_mtd_c),
+        "failed_mtd_v": failed_mtd_preview_v,
+        "failed_mtd_c": failed_mtd_preview_c,
 
-        # ---- Kept for Excel + historical tracking ----
-        "settled_mtd_v": float(settled_mtd_v),
-        "disputed_v": float(disputed_mtd_v),
-        "disputed_c": int(disputed_mtd["id_number"].nunique()) if not disputed_mtd.empty else 0,
+        # ---- Kept for Excel Dashboard tab ----
+        "settled_cycle_v": float(settled_cycle["amount"].sum()),
+        "settled_cycle_c": int(len(settled_cycle)),
+        "disputed_v": float(disputed_preview_v),
+        "disputed_c": int(disputed_preview["id_number"].nunique()) if not disputed_preview.empty else 0,
         "revenue_total": float(revenue_total),
         "revenue_cycle": float(revenue_cycle),
         "revenue_mtd": float(revenue_mtd),
@@ -515,30 +526,30 @@ def build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df):
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         dashboard = pd.DataFrame({
             "Metric": [
-                "Settled — 7-Day Cycle", "Settled MTD",
-                "Failed — 7-Day Cycle", "Failed MTD",
+                "Settled Today", "Settled Period Total",
+                "Success Rate", "Intracking",
+                "Failed Period", "Failed MTD",
+                "Settled — 7-Day Cycle",
                 "Disputed MTD",
                 "Client Cancelled Mandate", "Sale Not Submitted",
                 "Revenue — 7-Day Cycle", "Revenue — Month to Date",
-                "Success Rate",
                 "Curr Month Debits", "Next Month Debits",
-                "Intracking Clients", "Failed Cycle Count",
             ],
             "Value": [
+                f"{metrics['settled_today_c']} | R {metrics['settled_today_v']:,.2f}",
+                f"{metrics['settled_mtd_c']} | R {metrics['settled_mtd_v']:,.2f}",
+                f"{metrics['success_rate']:.1f}%",
+                f"{metrics['tracking_c']} | R {metrics['tracking_v']:,.2f}",
+                f"{metrics['failed_cycle_c']} | R {metrics['failed_cycle_v']:,.2f}",
+                f"{metrics['failed_mtd_c']} | R {metrics['failed_mtd_v']:,.2f}",
                 f"R {metrics['settled_cycle_v']:,.2f}",
-                f"R {metrics['settled_mtd_v']:,.2f}",
-                f"R {metrics['failed_cycle_v']:,.2f}",
-                f"R {metrics['failed_mtd_v']:,.2f}",
                 f"R {metrics['disputed_v']:,.2f}",
                 f"R {metrics['cancelled_mandate_v']:,.2f}",
                 f"R {metrics['sale_not_submitted_v']:,.2f}",
                 f"R {metrics['revenue_cycle']:,.2f}",
                 f"R {metrics['revenue_mtd']:,.2f}",
-                f"{metrics['success_rate']:.1f}%",
                 f"R {metrics['current_debits_v']:,.2f}",
                 f"R {metrics['next_debits_v']:,.2f}",
-                f"{metrics['tracking_c']}",
-                f"{metrics['failed_cycle_c']}",
             ],
         })
         dashboard.to_excel(writer, sheet_name="Dashboard", index=False)
@@ -585,7 +596,6 @@ def main():
     print(f"Failed SMS list size: {len(failed_sms_df)} clients")
     print(f"Intracking SMS list size: {len(tracking_sms_df)} clients")
 
-    # ---- metrics_history.csv ----
     try:
         history_bytes = download_file(service, folder_id, "metrics_history.csv")
         history_df = pd.read_csv(history_bytes)
@@ -606,7 +616,6 @@ def main():
     upload_or_update(service, folder_id, "metrics_history.csv", csv_bytes, "text/csv")
     print("Updated metrics_history.csv on Drive.")
 
-    # ---- Full Excel ----
     excel_bytes = build_excel(metrics, failed_sms_df, tracking_sms_df, sns_df, cm_df)
     excel_bytes.seek(0)
     upload_or_update(
@@ -615,7 +624,6 @@ def main():
     )
     print("Uploaded Debt_Review_Report.xlsx to Drive.")
 
-    # ---- Failed SMS standalone ----
     failed_sms_bytes = build_single_sheet_excel(failed_sms_df, "Failed SMS")
     failed_sms_bytes.seek(0)
     upload_or_update(
@@ -624,7 +632,6 @@ def main():
     )
     print("Uploaded Failed_SMS.xlsx to Drive.")
 
-    # ---- Intracking SMS standalone ----
     tracking_sms_bytes = build_single_sheet_excel(tracking_sms_df, "Intracking SMS")
     tracking_sms_bytes.seek(0)
     upload_or_update(
