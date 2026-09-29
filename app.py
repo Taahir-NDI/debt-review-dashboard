@@ -1,5 +1,5 @@
 # ================================================================
-# 📊 DEBT REVIEW DASHBOARD — FOLDER ID METHOD (NO MORE FILE ID UPDATES)
+# 📊 DEBT REVIEW DASHBOARD — FOLDER ID METHOD
 # ================================================================
 
 import streamlit as st
@@ -13,16 +13,16 @@ import json
 warnings.filterwarnings('ignore')
 import plotly.express as px
 
-# ---- Google Drive imports ----
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-# ================================================================
-# 📱 SMS PROVIDER — Embedded (Generic HTTP API)
-# ================================================================
 import requests
 
+
+# ================================================================
+# SMS PROVIDER
+# ================================================================
 class GenericSMSProvider:
     def __init__(self, api_url, api_key, from_number):
         self.api_url = api_url
@@ -34,13 +34,13 @@ class GenericSMSProvider:
             "api_key": self.api_key,
             "from": self.from_number,
             "to": to_number,
-            "message": message
+            "message": message,
         }
-        response = requests.post(self.api_url, json=payload)
-        return response.json()
+        return requests.post(self.api_url, json=payload).json()
+
 
 # ================================================================
-# 🆔 ID & PHONE NORMALIZERS
+# ID & PHONE NORMALIZERS
 # ================================================================
 def normalize_id(val):
     if pd.isna(val):
@@ -55,6 +55,7 @@ def normalize_id(val):
     if s.endswith(".0") and s[:-2].isdigit():
         s = s[:-2]
     return s
+
 
 def normalize_phone(val):
     if pd.isna(val):
@@ -76,8 +77,9 @@ def normalize_phone(val):
         s = s[:-2]
     return s
 
+
 # ================================================================
-# 0. CUSTOM STYLES
+# STYLES
 # ================================================================
 st.set_page_config(page_title="Debt Review Dashboard", layout="wide")
 
@@ -93,7 +95,7 @@ st.markdown("""
     .dataframe thead tr th { background-color: #f8f9fa !important; color: #1e1e2d !important; font-weight: 600 !important; border-bottom: 2px solid #dee2e6 !important; }
     .dataframe tbody tr:hover { background-color: #f8f9fa !important; }
     .main-header { margin-bottom: 24px; }
-    .main-header h1 { font-size: 28px; font-weight: 700; color: #1e1e2d; }
+    .main-header h1 { font-size: 28px; font-weight: 700; color: #1e1e2d; margin: 0; }
     .main-header .greeting { font-size: 16px; color: #6c757d; margin-top: -4px; }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
@@ -101,8 +103,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
 # ================================================================
-# 1. SIDEBAR
+# SIDEBAR
 # ================================================================
 st.sidebar.markdown("""
 <div style="padding: 10px 0 20px 0; text-align: center; color: #1e1e2d;">
@@ -142,8 +145,9 @@ else:
     end_dt = None
     date_range = None
 
+
 # ================================================================
-# 2. GOOGLE DRIVE AUTH
+# GOOGLE DRIVE
 # ================================================================
 def download_file_from_drive(service, file_id):
     request = service.files().get_media(fileId=file_id)
@@ -151,9 +155,10 @@ def download_file_from_drive(service, file_id):
     downloader = MediaIoBaseDownload(fh, request)
     done = False
     while not done:
-        status, done = downloader.next_chunk()
+        _, done = downloader.next_chunk()
     fh.seek(0)
     return fh
+
 
 def get_file_id_from_folder(service, folder_id, file_name):
     query = f"'{folder_id}' in parents and name = '{file_name}' and trashed = false"
@@ -161,8 +166,8 @@ def get_file_id_from_folder(service, folder_id, file_name):
     files = results.get('files', [])
     if files:
         return files[0]['id']
-    else:
-        raise Exception(f"File '{file_name}' not found in folder.")
+    raise Exception(f"File '{file_name}' not found in folder.")
+
 
 drive_connected = False
 try:
@@ -177,7 +182,7 @@ try:
         "token_uri": st.secrets["TOKEN_URI"],
         "auth_provider_x509_cert_url": st.secrets["AUTH_PROVIDER_X509_CERT_URL"],
         "client_x509_cert_url": st.secrets["CLIENT_X509_CERT_URL"],
-        "universe_domain": st.secrets.get("UNIVERSE_DOMAIN", "googleapis.com")
+        "universe_domain": st.secrets.get("UNIVERSE_DOMAIN", "googleapis.com"),
     }
     creds = service_account.Credentials.from_service_account_info(creds_info)
     service = build('drive', 'v3', credentials=creds)
@@ -202,8 +207,9 @@ if drive_connected:
 else:
     st.warning("⚠️ Not connected to Google Drive")
 
+
 # ================================================================
-# ---- Helper functions ----
+# HELPERS
 # ================================================================
 def find_sheet(variants, all_sheets):
     for sheet in all_sheets:
@@ -212,6 +218,7 @@ def find_sheet(variants, all_sheets):
             if variant in sheet_upper:
                 return sheet
     return None
+
 
 def find_columns(df):
     status_col = None
@@ -228,6 +235,7 @@ def find_columns(df):
     if status_col is None:
         status_col = df.columns[-1]
 
+    # Prefer exact ID NUMBER
     id_col = None
     for col in df.columns:
         if col.strip().upper() == 'ID NUMBER':
@@ -294,6 +302,7 @@ def find_columns(df):
                 name_col = col
                 break
 
+    # Prefer exact CELL
     cell_col = None
     for col in df.columns:
         if str(col).strip().upper() == 'CELL':
@@ -311,6 +320,7 @@ def find_columns(df):
                 break
 
     return status_col, id_col, amount_col, stage_col, date_col, name_col, cell_col
+
 
 def extract_future_debits(df, sheet_name, filter_future=True):
     if df is None or df.empty:
@@ -338,10 +348,7 @@ def extract_future_debits(df, sheet_name, filter_future=True):
         df_future['due_date'] = pd.NaT
     df_future['id_number'] = df_future[id_col].apply(normalize_id)
     df_future['amount'] = pd.to_numeric(df_future[amount_col], errors='coerce')
-    if name_col is not None:
-        df_future['client_name'] = df_future[name_col]
-    else:
-        df_future['client_name'] = ''
+    df_future['client_name'] = df_future[name_col] if name_col is not None else ''
     if cell_col is not None:
         df_future['cell'] = df_future[cell_col].apply(normalize_phone)
     else:
@@ -350,11 +357,13 @@ def extract_future_debits(df, sheet_name, filter_future=True):
     df_future['sheet_source'] = sheet_name
     return df_future
 
+
 # ================================================================
-# ---- Core processing function ----
+# CORE PROCESSING
 # ================================================================
 @st.cache_data
-def process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode=False, ref_date=None, forecast_mode=False, date_range=None):
+def process_data(fee_content, payment_content, current_sheet, next_sheet,
+                 single_month_mode=False, ref_date=None, forecast_mode=False, date_range=None):
 
     def get_settled_df(df, start_date=None, end_date=None):
         temp = df[df['status'].str.upper() == 'SETTLED']
@@ -399,13 +408,11 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             temp = temp[temp[date_col] >= start_date]
             temp = temp[temp[date_col] <= end_date]
         if not temp.empty:
-            grouped = temp.groupby('id_number').agg({
+            return temp.groupby('id_number').agg({
                 'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
                 'amount': 'sum', 'status': 'first', 'collection_date': 'max'
             }).reset_index()
-            return grouped
-        else:
-            return pd.DataFrame()
+        return pd.DataFrame()
 
     def get_latest_record(group):
         return group.sort_values('collection_date').iloc[-1]
@@ -418,15 +425,15 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
 
     if ref_date is None:
         ref_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    if isinstance(ref_date, datetime) is False:
+    if not isinstance(ref_date, datetime):
         ref_date = datetime.combine(ref_date, datetime.min.time())
     today = ref_date
 
     if date_range:
         start_dt, end_dt = date_range
-        if isinstance(start_dt, datetime) is False:
+        if not isinstance(start_dt, datetime):
             start_dt = datetime.combine(start_dt, datetime.min.time())
-        if isinstance(end_dt, datetime) is False:
+        if not isinstance(end_dt, datetime):
             end_dt = datetime.combine(end_dt, datetime.max.time())
         use_custom_range = True
     else:
@@ -464,7 +471,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         fee_base_cols.append(cell_col)
 
     fee_base = fee_status_df[fee_base_cols].copy()
-    fee_base.rename(columns={id_col: 'id_number', stage_col: 'payment_stage', amount_col: 'amount', status_col: 'status'}, inplace=True)
+    fee_base.rename(columns={id_col: 'id_number', stage_col: 'payment_stage',
+                             amount_col: 'amount', status_col: 'status'}, inplace=True)
     if date_col is not None:
         fee_base.rename(columns={date_col: 'collection_date'}, inplace=True)
     if name_col is not None:
@@ -499,14 +507,13 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     else:
         try:
             df_pmt = pd.read_excel(payment_content, sheet_name='Details', header=3)
-        except:
+        except Exception:
             try:
                 df_pmt = pd.read_excel(payment_content, header=3)
-            except:
+            except Exception:
                 df_pmt = pd.read_excel(payment_content)
 
         raw_pmt = df_pmt.copy()
-
         pmt_status_col, pmt_id_col, pmt_amount_col, pmt_stage_col, pmt_date_col, pmt_name_col, pmt_cell_col = find_columns(df_pmt)
 
         pmt_sms = df_pmt.copy()
@@ -534,6 +541,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             'cancelled_mandate_count': 0, 'sale_not_submitted_count': 0
         }
 
+        # Failed SMS — Settled Period Total window
         failed_keywords = ['FAILED', 'FAIL', 'DECLINED', 'REJECTED', 'DISPUTED', 'CLIENT CANCELLED MANDATE']
         failed_mask = pmt_sms['status'].str.upper().str.contains('|'.join(failed_keywords), na=False)
         failed_pmt = pmt_sms[failed_mask].copy()
@@ -674,8 +682,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     else:
         raw['effective_settlement_date'] = raw['collection_date']
 
-    # NOTE: This filter is applied to 'raw', but Sale Not Submitted now uses
-    # 'fee_base' directly, so it is not affected by this date cut.
     if use_custom_range:
         raw = raw[raw['effective_settlement_date'] >= start_dt]
         raw = raw[raw['effective_settlement_date'] <= end_dt]
@@ -710,15 +716,9 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         if pd.isna(rank):
             return 0
         if rank == 1:
-            if amount < 3000:
-                return amount
-            else:
-                return min(amount, RESTRUCTURE_CAP)
+            return amount if amount < 3000 else min(amount, RESTRUCTURE_CAP)
         elif rank == 2:
-            if amount < 3000:
-                return min(amount * 1.5, LEGAL_CAP_UNDER_3000)
-            else:
-                return min(amount, LEGAL_CAP)
+            return min(amount * 1.5, LEGAL_CAP_UNDER_3000) if amount < 3000 else min(amount, LEGAL_CAP)
         else:
             return min(amount * AFTERCARE_RATE, AFTERCARE_CAP)
 
@@ -747,11 +747,12 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         cancelled_mandate_mtd_v = cancelled_mandate_mtd_df['amount'].sum()
         cancelled_mandate_c = len(cancelled_mandate_mtd_df)
 
-        current_month_settled = raw_stage_1_2[
+        cycle_settled = raw_stage_1_2[
             (raw_stage_1_2['status'].str.upper() == 'SETTLED') &
             (raw_stage_1_2['effective_settlement_date'] >= start_dt) &
             (raw_stage_1_2['effective_settlement_date'] <= end_dt)
         ]
+        mtd_settled = cycle_settled
     else:
         settled_today_df = get_settled_df(raw_stage_1_2, today, today)
         settled_cycle_df = get_settled_df(raw_stage_1_2, last_friday, today)
@@ -770,31 +771,30 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         cancelled_mandate_mtd_v = cancelled_mandate_mtd_df['amount'].sum()
         cancelled_mandate_c = len(cancelled_mandate_mtd_df)
 
-        current_month_settled = raw_stage_1_2[
+        cycle_settled = raw_stage_1_2[
+            (raw_stage_1_2['status'].str.upper() == 'SETTLED') &
+            (raw_stage_1_2['effective_settlement_date'] >= last_friday) &
+            (raw_stage_1_2['effective_settlement_date'] <= today)
+        ]
+        mtd_settled = raw_stage_1_2[
             (raw_stage_1_2['status'].str.upper() == 'SETTLED') &
             (raw_stage_1_2['effective_settlement_date'] >= first_of_month) &
             (raw_stage_1_2['effective_settlement_date'] <= today)
         ]
 
-    # ================================================================
-    # ✅ FIX: Sale Not Submitted — pull directly from fee_base (the raw
-    # Fee Audit sheet) with NO date or stage restriction. The Fee Audit
-    # sheet itself represents the current month, so we simply filter by
-    # status to capture every "Sale Not Submitted" record for this month.
-    # ================================================================
+    revenue_cycle = cycle_settled['revenue'].sum()
+    revenue_mtd = mtd_settled['revenue'].sum()
+    revenue_total = revenue_cycle
+
+    # SALE NOT SUBMITTED — from fee_base, all current-month rows
     sale_not_submitted_mtd_df = fee_base[
         fee_base['status'].astype(str).str.upper().str.contains('SALE NOT SUBMITTED', na=False)
     ].copy()
 
-    # Deduplicate: one row per client (grouped by id_number)
     if not sale_not_submitted_mtd_df.empty:
         sale_not_submitted_dedup = sale_not_submitted_mtd_df.groupby('id_number').agg({
-            'client_name': 'first',
-            'cell': 'first',
-            'payment_stage': 'first',
-            'amount': 'sum',
-            'status': 'first',
-            'collection_date': 'max'
+            'client_name': 'first', 'cell': 'first', 'payment_stage': 'first',
+            'amount': 'sum', 'status': 'first', 'collection_date': 'max'
         }).reset_index()
     else:
         sale_not_submitted_dedup = pd.DataFrame(columns=[
@@ -823,8 +823,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     failed_mtd_c, failed_mtd_v = len(failed_mtd_df), failed_mtd_df['amount'].sum()
     disputed_c, disputed_v = len(disputed_df), disputed_df['amount'].sum() if not disputed_df.empty else 0
 
-    revenue_total = current_month_settled['revenue'].sum()
-
     settled_clients = raw_stage_1_2[raw_stage_1_2['status'].str.upper() == 'SETTLED'].copy()
     rank_1_revenue = settled_clients[settled_clients['settlement_rank'] == 1]['revenue']
     rank_2_revenue = settled_clients[settled_clients['settlement_rank'] == 2]['revenue']
@@ -845,10 +843,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
     forecast_total = forecast_restructuring + forecast_aftercare + forecast_admin_app + forecast_legal
 
     denominator = settled_mtd_v + failed_mtd_v + disputed_mtd_v
-    if denominator > 0:
-        success_rate = (settled_mtd_v / denominator) * 100
-    else:
-        success_rate = 0
+    success_rate = (settled_mtd_v / denominator) * 100 if denominator > 0 else 0
 
     if use_custom_range:
         def extract_all_debits(df, sheet_name):
@@ -870,10 +865,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             df_temp = df_temp[df_temp['amount'] > 0]
             df_temp['id_number'] = df_temp[id_col].apply(normalize_id)
             df_temp['client_name'] = df_temp[name_col] if name_col else ''
-            if cell_col:
-                df_temp['cell'] = df_temp[cell_col].apply(normalize_phone)
-            else:
-                df_temp['cell'] = ''
+            df_temp['cell'] = df_temp[cell_col].apply(normalize_phone) if cell_col else ''
             df_temp['payment_stage'] = pd.to_numeric(df_temp[stage_col], errors='coerce')
             return df_temp[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'due_date']]
 
@@ -895,14 +887,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             range_debits_df = pd.DataFrame()
         else:
             tomorrow = today + timedelta(days=1)
-            if today.month == 12:
-                last_day_month = today.replace(year=today.year+1, month=1, day=1) - timedelta(days=1)
-            else:
-                last_day_month = today.replace(month=today.month+1, day=1) - timedelta(days=1)
-            if today.month == 12:
-                first_of_next_month = today.replace(year=today.year+1, month=1, day=1)
-            else:
-                first_of_next_month = today.replace(month=today.month+1, day=1)
+            last_day_month = (today.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+            first_of_next_month = (today.replace(day=28) + timedelta(days=4)).replace(day=1)
             last_of_next_month = (first_of_next_month + timedelta(days=32)).replace(day=1) - timedelta(days=1)
 
             if single_month_mode:
@@ -953,9 +939,11 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         else:
             priority_df['days_overdue'] = 0
         priority_df['priority_score'] = priority_df['stage_weight'] + priority_df['days_overdue'] * 2
-        priority_df['Priority Level'] = priority_df['priority_score'].apply(lambda x: 'High' if x >= 150 else ('Medium' if x >= 100 else 'Low'))
+        priority_df['Priority Level'] = priority_df['priority_score'].apply(
+            lambda x: 'High' if x >= 150 else ('Medium' if x >= 100 else 'Low'))
 
-        cols = ['id_number', 'client_name', 'cell', 'payment_stage', 'days_overdue', 'amount', 'status', 'priority_score', 'Priority Level']
+        cols = ['id_number', 'client_name', 'cell', 'payment_stage', 'days_overdue',
+                'amount', 'status', 'priority_score', 'Priority Level']
         for col in cols:
             if col not in priority_df.columns:
                 priority_df[col] = ''
@@ -967,15 +955,19 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
 
         if not failed_priority.empty:
             failed_priority = failed_priority[cols]
-            failed_priority.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level']
+            failed_priority.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue',
+                                        'Amount', 'Status', 'Score', 'Priority Level']
         else:
-            failed_priority = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level'])
+            failed_priority = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue',
+                                                     'Amount', 'Status', 'Score', 'Priority Level'])
 
         if not tracking_priority.empty:
             tracking_priority = tracking_priority[cols]
-            tracking_priority.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level']
+            tracking_priority.columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue',
+                                          'Amount', 'Status', 'Score', 'Priority Level']
         else:
-            tracking_priority = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue', 'Amount', 'Status', 'Score', 'Priority Level'])
+            tracking_priority = pd.DataFrame(columns=['ID NUMBER', 'Name', 'Cell', 'Stage', 'Days Overdue',
+                                                       'Amount', 'Status', 'Score', 'Priority Level'])
 
         separator = pd.DataFrame([[''] * len(failed_priority.columns)], columns=failed_priority.columns)
         header_failed = pd.DataFrame([['=== FAILED PAYMENTS ==='] + [''] * (len(failed_priority.columns) - 1)], columns=failed_priority.columns)
@@ -1048,7 +1040,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         }).reset_index()
         detail_dfs['Client Cancelled Mandate'] = prep_detail_df(cm_dedup, 'collection_date')
 
-    # ✅ Sale Not Submitted detail sheet — uses the full-month dedup
     if not sale_not_submitted_dedup.empty:
         detail_dfs['Sale Not Submitted'] = prep_detail_df(sale_not_submitted_dedup, 'collection_date')
 
@@ -1060,7 +1051,6 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             detail_dfs['Debits Detail'] = range_debits_df[['id_number', 'client_name', 'cell', 'payment_stage', 'amount', 'due_date']].copy()
             detail_dfs['Debits Detail'].columns = ['ID NUMBER', 'Name', 'Cell', 'Stage', 'Amount', 'Date']
 
-    # ✅ Sale Not Submitted SMS list — built from the full-month dedup
     if not sale_not_submitted_dedup.empty:
         sale_not_submitted_sms_pmt = pd.DataFrame({
             'Cell': sale_not_submitted_dedup['cell'],
@@ -1068,7 +1058,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             'ID NUMBER': sale_not_submitted_dedup['id_number'].astype(str),
             'Stage': sale_not_submitted_dedup['payment_stage'],
             'Amount': sale_not_submitted_dedup['amount'],
-            'Status': sale_not_submitted_dedup['status']
+            'Status': sale_not_submitted_dedup['status'],
         })
     else:
         sale_not_submitted_sms_pmt = pd.DataFrame(
@@ -1085,7 +1075,7 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
             'ID NUMBER': cm_dedup2['id_number'].astype(str),
             'Stage': cm_dedup2['payment_stage'],
             'Amount': cm_dedup2['amount'],
-            'Status': cm_dedup2['status']
+            'Status': cm_dedup2['status'],
         })
         existing_ids = set(failed_sms_pmt['ID NUMBER'].astype(str)) if not failed_sms_pmt.empty else set()
         cm_sms = cm_sms[~cm_sms['ID NUMBER'].astype(str).isin(existing_ids)]
@@ -1125,6 +1115,8 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         'sale_not_submitted_c': sale_not_submitted_c,
         'sale_not_submitted_v': sale_not_submitted_mtd_v,
         'revenue_total': revenue_total,
+        'revenue_cycle': revenue_cycle,
+        'revenue_mtd': revenue_mtd,
         'forecast_restructuring': forecast_restructuring,
         'forecast_legal': forecast_legal,
         'forecast_aftercare': forecast_aftercare,
@@ -1143,11 +1135,12 @@ def process_data(fee_content, payment_content, current_sheet, next_sheet, single
         'fee_status_df': fee_status_df,
         'fee_base': fee_base,
         'use_custom_range': use_custom_range,
-        'pmt_debug': pmt_debug if not forecast_mode else None
+        'pmt_debug': pmt_debug if not forecast_mode else None,
     }
 
+
 # ================================================================
-# ---- Send SMS helper ----
+# SEND SMS HELPER
 # ================================================================
 def send_sms(to_number, message, provider_type="generic"):
     try:
@@ -1169,8 +1162,9 @@ def send_sms(to_number, message, provider_type="generic"):
     except Exception as e:
         return False, str(e)
 
+
 # ================================================================
-# ---- Detect sheets ----
+# SHEET DETECTION
 # ================================================================
 with st.spinner("⏳ Reading file structure..."):
     xls = pd.ExcelFile(fee_content)
@@ -1204,30 +1198,34 @@ if auto_next is None:
 current_sheet = st.sidebar.selectbox("Current Month Sheet", all_sheets,
     index=all_sheets.index(auto_current) if auto_current in all_sheets else 0)
 
+
 def get_next_month_sheet(current_sheet_name, all_sheets):
     try:
         parts = current_sheet_name.split()
         for i, part in enumerate(parts):
-            if part.upper() in ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER']:
+            if part.upper() in ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE',
+                                'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER']:
                 month_str = part
-                year_str = parts[i+1] if i+1 < len(parts) else None
+                year_str = parts[i + 1] if i + 1 < len(parts) else None
                 break
         else:
             return auto_next
-        month_names = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER']
+        month_names = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE',
+                       'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER']
         idx = month_names.index(month_str.upper())
         next_idx = (idx + 1) % 12
         next_month_str = month_names[next_idx]
         next_year = int(year_str) if year_str else datetime.now().year
         if next_idx == 0:
             next_year += 1
-        next_month_full = f"{next_month_str} {next_year}"
+        target = f"{next_month_str} {next_year}"
         for sheet in all_sheets:
-            if next_month_full in sheet.upper():
+            if target in sheet.upper():
                 return sheet
         return None
-    except:
+    except Exception:
         return None
+
 
 next_sheet_default = get_next_month_sheet(current_sheet, all_sheets) if not single_month_mode else None
 
@@ -1235,7 +1233,7 @@ if single_month_mode:
     next_sheet = None
 else:
     next_sheet = st.sidebar.selectbox("Next Month Sheet", all_sheets,
-        index=all_sheets.index(next_sheet_default) if next_sheet_default in all_sheets else 0, disabled=False)
+        index=all_sheets.index(next_sheet_default) if next_sheet_default in all_sheets else 0)
 
 if single_month_mode:
     try:
@@ -1245,20 +1243,19 @@ if single_month_mode:
         month_num = datetime.strptime(month_str, '%B').month
         year = int(year_str)
         ref_date = datetime(year, month_num, 1)
-        if month_num == 12:
-            next_month = datetime(year+1, 1, 1)
-        else:
-            next_month = datetime(year, month_num+1, 1)
+        next_month = datetime(year + 1, 1, 1) if month_num == 12 else datetime(year, month_num + 1, 1)
         ref_date = next_month - timedelta(days=1)
-    except:
+    except Exception:
         ref_date = today
 else:
     ref_date = today
 
 if date_mode == "Custom Range":
-    result = process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode, end_dt, forecast_mode, date_range)
+    result = process_data(fee_content, payment_content, current_sheet, next_sheet,
+                          single_month_mode, end_dt, forecast_mode, date_range)
 else:
-    result = process_data(fee_content, payment_content, current_sheet, next_sheet, single_month_mode, ref_date, forecast_mode)
+    result = process_data(fee_content, payment_content, current_sheet, next_sheet,
+                          single_month_mode, ref_date, forecast_mode)
 
 if result is None:
     st.error("❌ No active fee-due clients found. Please check your data.")
@@ -1274,7 +1271,8 @@ if result is None:
     failed_mtd_c, failed_mtd_v, disputed_c, disputed_v,
     cancelled_mandate_c, cancelled_mandate_v,
     sale_not_submitted_c, sale_not_submitted_v,
-    revenue_total, forecast_restructuring, forecast_legal, forecast_aftercare,
+    revenue_total, revenue_cycle, revenue_mtd,
+    forecast_restructuring, forecast_legal, forecast_aftercare,
     forecast_admin_app, forecast_total, success_rate,
     combined_priority, failed_sms, tracking_sms, sale_not_submitted_sms,
     failed_clients, detail_dfs, raw, raw_stage_1_2, all_future, fee_status_df, fee_base
@@ -1288,34 +1286,134 @@ if result is None:
     result['failed_mtd_c'], result['failed_mtd_v'], result['disputed_c'], result['disputed_v'],
     result['cancelled_mandate_c'], result['cancelled_mandate_v'],
     result['sale_not_submitted_c'], result['sale_not_submitted_v'],
-    result['revenue_total'], result['forecast_restructuring'], result['forecast_legal'], result['forecast_aftercare'],
+    result['revenue_total'], result['revenue_cycle'], result['revenue_mtd'],
+    result['forecast_restructuring'], result['forecast_legal'], result['forecast_aftercare'],
     result['forecast_admin_app'], result['forecast_total'], result['success_rate'],
     result['combined_priority'], result['failed_sms'], result['tracking_sms'], result['sale_not_submitted_sms'],
     result['failed_clients'], result['detail_dfs'], result['raw'], result['raw_stage_1_2'],
     result['all_future'], result['fee_status_df'], result['fee_base']
 )
 
+
 # ================================================================
-# ---- Dashboard output ----
+# EXCEL GENERATOR (defined here so the top button can use it)
+# ================================================================
+def generate_excel():
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        dashboard_data = {
+            'Metric': ['Settled — 7-Day Cycle', 'Settled Today', 'Settled MTD',
+                       'Settling (Stage 1/2)', 'Submitted (Stage 1/2)', 'Sub Collect (Stage 1/2)',
+                       'Intracking (Stage 1/2)',
+                       'Curr Month Debits (Stage 1/2)', 'Next Month Debits (Stage 1/2)',
+                       'Failed — 7-Day Cycle', 'Failed MTD',
+                       'Disputed (Stage 1/2)', 'Client Cancelled Mandate (Stage 1/2)',
+                       'Sale Not Submitted (Stage 1/2)',
+                       'Revenue — 7-Day Cycle',
+                       'Revenue — Month to Date',
+                       'Success Rate (Period, by value, Disputed = Failure)',
+                       'Single Month Mode'],
+            'Value': [f"{settled_cycle_c} | R{settled_cycle_v:,.2f}",
+                      f"{settled_today_c} | R{settled_today_v:,.2f}",
+                      f"{settled_mtd_c} | R{settled_mtd_v:,.2f}",
+                      f"{settling_c} | R{settling_v:,.2f}",
+                      f"{submitted_c} | R{submitted_v:,.2f}",
+                      f"{sub_col_c} | R{sub_col_v:,.2f}",
+                      f"{tracking_c} | R{tracking_v:,.2f}",
+                      f"{current_debits_c} | R{current_debits_v:,.2f}",
+                      f"{next_debits_c} | R{next_debits_v:,.2f}" if not single_month_mode else "N/A",
+                      f"{failed_cycle_c} | R{failed_cycle_v:,.2f}",
+                      f"{failed_mtd_c} | R{failed_mtd_v:,.2f}",
+                      f"{disputed_c} | R{disputed_v:,.2f}",
+                      f"{cancelled_mandate_c} | R{cancelled_mandate_v:,.2f}",
+                      f"{sale_not_submitted_c} | R{sale_not_submitted_v:,.2f}",
+                      f"R{revenue_cycle:,.2f}",
+                      f"R{revenue_mtd:,.2f}",
+                      f"{success_rate:.1f}%",
+                      "Yes" if single_month_mode else "No"]
+        }
+        pd.DataFrame(dashboard_data).to_excel(writer, sheet_name='Dashboard', index=False)
+
+        combined_priority.to_excel(writer, sheet_name='Priority Queue', index=False, header=False)
+        workbook = writer.book
+        worksheet_pq = writer.sheets['Priority Queue']
+        worksheet_pq.set_column('A:A', None, workbook.add_format({'num_format': '@'}))
+
+        format_high = workbook.add_format({'bg_color': '#FF0000', 'font_color': '#FFFFFF', 'bold': True})
+        format_medium = workbook.add_format({'bg_color': '#FFA500', 'font_color': '#000000'})
+        format_low = workbook.add_format({'bg_color': '#FFFF00', 'font_color': '#000000'})
+        last_row_pq = len(combined_priority) + 1
+        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {'type': 'formula', 'criteria': '=$I1="High"', 'format': format_high})
+        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {'type': 'formula', 'criteria': '=$I1="Medium"', 'format': format_medium})
+        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {'type': 'formula', 'criteria': '=$I1="Low"', 'format': format_low})
+
+        failed_clients.to_excel(writer, sheet_name='Failed Clients', index=False)
+        writer.sheets['Failed Clients'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
+
+        if not failed_sms.empty:
+            failed_sms_out = failed_sms[['Cell', 'Name', 'ID NUMBER', 'Stage', 'Amount', 'Status']]
+        else:
+            failed_sms_out = failed_sms
+        failed_sms_out.to_excel(writer, sheet_name='Failed Clients (SMS)', index=False)
+        writer.sheets['Failed Clients (SMS)'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
+
+        if not tracking_sms.empty:
+            tracking_sms_out = tracking_sms[['Cell', 'Name', 'ID NUMBER', 'Stage', 'Amount', 'Status']]
+        else:
+            tracking_sms_out = tracking_sms
+        tracking_sms_out.to_excel(writer, sheet_name='Intracking Clients (SMS)', index=False)
+        writer.sheets['Intracking Clients (SMS)'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
+
+        sale_not_submitted_sms.to_excel(writer, sheet_name='Sale Not Submitted', index=False)
+        writer.sheets['Sale Not Submitted'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
+
+        for sheet_name, df in detail_dfs.items():
+            if not df.empty:
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+                writer.sheets[sheet_name].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
+
+    output.seek(0)
+    return output
+
+
+# ================================================================
+# HEADER + DOWNLOAD BUTTON
 # ================================================================
 if date_mode == "Custom Range":
     date_label = f"{start_date.strftime('%d %b %Y')} – {end_date.strftime('%d %b %Y')}"
 else:
     date_label = ref_date_used.strftime('%d %B %Y')
 
-st.markdown(f"""
-<div class="main-header">
-    <h1>Debt Review Dashboard</h1>
-    <div class="greeting">Welcome! · Report date: {date_label}</div>
-</div>
-""", unsafe_allow_html=True)
+header_col, button_col = st.columns([4, 1])
 
-# ---- KPI Row 1 ----
+with header_col:
+    st.markdown(f"""
+    <div class="main-header">
+        <h1>Debt Review Dashboard</h1>
+        <div class="greeting">Welcome! · Report date: {date_label}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with button_col:
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+    excel_data = generate_excel()
+    st.download_button(
+        label="📥 Download Full Report",
+        data=excel_data,
+        file_name=f"Debt_Review_Dashboard_{ref_date_used.strftime('%Y%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+
+# ================================================================
+# OUTPUT — KPI Row 1
+# ================================================================
 col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.markdown(f"""
     <div class="metric-card">
-        <div class="metric-label">✅ Settled {date_mode}</div>
+        <div class="metric-label">✅ Settled — 7-Day Cycle</div>
         <div class="metric-value">R {settled_cycle_v:,.2f}</div>
         <div class="metric-delta">{settled_cycle_c} clients</div>
     </div>
@@ -1344,9 +1442,9 @@ with col2:
 with col3:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #28a745;">
-        <div class="metric-label">💰 Revenue {date_mode}</div>
-        <div class="metric-value">R {revenue_total:,.2f}</div>
-        <div class="metric-delta">&nbsp;</div>
+        <div class="metric-label">💰 Revenue — 7-Day Cycle</div>
+        <div class="metric-value">R {revenue_cycle:,.2f}</div>
+        <div class="metric-delta">MTD: R {revenue_mtd:,.2f}</div>
     </div>
     """, unsafe_allow_html=True)
 with col4:
@@ -1371,7 +1469,7 @@ with col1:
 with col2:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #17a2b8;">
-        <div class="metric-label">Settled Period Total</div>
+        <div class="metric-label">Settled MTD</div>
         <div class="metric-value">R {settled_mtd_v:,.2f}</div>
         <div class="metric-delta">{settled_mtd_c} clients</div>
     </div>
@@ -1379,7 +1477,7 @@ with col2:
 with col3:
     st.markdown(f"""
     <div class="metric-card" style="border-left-color: #dc3545;">
-        <div class="metric-label">Failed Period</div>
+        <div class="metric-label">Failed — 7-Day Cycle</div>
         <div class="metric-value">R {failed_cycle_v:,.2f}</div>
         <div class="metric-delta">{failed_cycle_c} clients</div>
     </div>
@@ -1494,9 +1592,10 @@ if date_mode == "Custom Range":
         """, unsafe_allow_html=True)
 else:
     with col1:
+        label = "Current Month (tomorrow → end)" if not single_month_mode else "Current Month Debits"
         st.markdown(f"""
         <div class="metric-card" style="border-left-color: #4e8cff;">
-            <div class="metric-label">{"Current Month (tomorrow → end)" if not single_month_mode else "Current Month Debits"}</div>
+            <div class="metric-label">{label}</div>
             <div class="metric-value">R {current_debits_v:,.2f}</div>
             <div class="metric-delta">{current_debits_c} clients</div>
         </div>
@@ -1537,10 +1636,12 @@ with col2:
     with st.container():
         st.markdown('<div class="chart-container">', unsafe_allow_html=True)
         settled_vs_failed = pd.DataFrame({
-            'Category': ['Settled Period', 'Failed Period'],
+            'Category': ['Settled — 7-Day', 'Failed — 7-Day'],
             'Amount': [settled_cycle_v, failed_cycle_v]
         })
-        st.plotly_chart(px.bar(settled_vs_failed, x='Category', y='Amount', title=f'Settled vs Failed ({date_mode})', color='Category'), use_container_width=True)
+        st.plotly_chart(px.bar(settled_vs_failed, x='Category', y='Amount',
+                                title=f'Settled vs Failed — 7-Day ({date_mode})', color='Category'),
+                        use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 col1, col2 = st.columns(2)
@@ -1549,14 +1650,17 @@ with col1:
         st.markdown('<div class="chart-container">', unsafe_allow_html=True)
         if date_mode == "Custom Range":
             debits_df = pd.DataFrame({'Period': ['Total Due'], 'Amount': [current_debits_v]})
-            st.plotly_chart(px.bar(debits_df, x='Period', y='Amount', title='Total Due in Period', color='Period'), use_container_width=True)
+            st.plotly_chart(px.bar(debits_df, x='Period', y='Amount', title='Total Due in Period', color='Period'),
+                            use_container_width=True)
         else:
             if not single_month_mode:
                 debits_df = pd.DataFrame({'Month': ['Current', 'Next'], 'Amount': [current_debits_v, next_debits_v]})
-                st.plotly_chart(px.bar(debits_df, x='Month', y='Amount', title='Debits Comparison', color='Month'), use_container_width=True)
+                st.plotly_chart(px.bar(debits_df, x='Month', y='Amount', title='Debits Comparison', color='Month'),
+                                use_container_width=True)
             else:
                 debits_df = pd.DataFrame({'Month': ['Selected Month'], 'Amount': [current_debits_v]})
-                st.plotly_chart(px.bar(debits_df, x='Month', y='Amount', title='Debits (Single Month)', color='Month'), use_container_width=True)
+                st.plotly_chart(px.bar(debits_df, x='Month', y='Amount', title='Debits (Single Month)', color='Month'),
+                                use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 with col2:
     with st.container():
@@ -1564,7 +1668,9 @@ with col2:
         if not combined_priority.empty and 'Priority Level' in combined_priority.columns:
             priority_counts = combined_priority['Priority Level'].value_counts().reset_index()
             priority_counts.columns = ['Priority', 'Count']
-            st.plotly_chart(px.bar(priority_counts, x='Priority', y='Count', title='Priority Queue Distribution', color='Priority'), use_container_width=True)
+            st.plotly_chart(px.bar(priority_counts, x='Priority', y='Count',
+                                    title='Priority Queue Distribution', color='Priority'),
+                            use_container_width=True)
         else:
             st.info("No priority data available.")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -1573,10 +1679,7 @@ with col2:
 history_file = "history/metrics_history.csv"
 os.makedirs(os.path.dirname(history_file), exist_ok=True)
 
-if single_month_mode:
-    month_name = current_sheet_used
-else:
-    month_name = ref_date_used.strftime('%B %Y')
+month_name = current_sheet_used if single_month_mode else ref_date_used.strftime('%B %Y')
 
 new_row = {
     'report_date': ref_date_used.strftime('%Y-%m-%d'),
@@ -1585,6 +1688,8 @@ new_row = {
     'failed_mtd_v': failed_mtd_v,
     'success_rate': success_rate,
     'revenue_total': revenue_total,
+    'revenue_cycle': revenue_cycle,
+    'revenue_mtd': revenue_mtd,
     'current_debits_v': current_debits_v,
     'next_debits_v': next_debits_v,
     'settled_today_c': settled_today_c,
@@ -1606,7 +1711,7 @@ try:
     else:
         history_df = pd.DataFrame([new_row])
     history_df.to_csv(history_file, index=False)
-except:
+except Exception:
     pass
 
 if os.path.exists(history_file):
@@ -1640,24 +1745,24 @@ if os.path.exists(history_file):
                     st.markdown('</div>', unsafe_allow_html=True)
 
             st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-            fig_rd = px.line(history_df, x='report_date', y=['revenue_total', 'current_debits_v', 'next_debits_v'],
-                             title='Revenue, Current & Next Month Debits',
-                             labels={'value': 'Amount (R)', 'variable': 'Category'})
+            fig_rd = px.line(history_df, x='report_date',
+                              y=['revenue_total', 'current_debits_v', 'next_debits_v'],
+                              title='Revenue, Current & Next Month Debits',
+                              labels={'value': 'Amount (R)', 'variable': 'Category'})
             st.plotly_chart(fig_rd, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
         else:
             st.info("📊 Collecting data for historical trends. Come back after more months of data.")
-    except:
+    except Exception:
         pass
 
-# ================================================================
-# ---- SMS SENDING ----
-# ================================================================
+# ---- SMS Sending ----
 st.markdown("""
 <div style="margin-top: 24px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">📱 Send SMS Messages</h3>
 </div>
 """, unsafe_allow_html=True)
+
 
 def send_bulk_sms(selected_df, message, list_name):
     if selected_df.empty:
@@ -1688,6 +1793,7 @@ def send_bulk_sms(selected_df, message, list_name):
         st.success(f"✅ All {success_count} SMS messages sent successfully to {list_name}.")
     else:
         st.warning(f"⚠️ Sent {success_count} out of {len(selected_df)}. Failed: {', '.join(failed_list)}")
+
 
 st.subheader("📋 Failed Clients (SMS)")
 st.caption("Includes Failed, Disputed, and Client Cancelled Mandate clients within the current Settled Period.")
@@ -1740,9 +1846,7 @@ if not tracking_sms.empty:
 else:
     st.info("No intracking clients.")
 
-# ================================================================
-# 📭 SALE NOT SUBMITTED
-# ================================================================
+# ---- Sale Not Submitted ----
 st.markdown("""
 <div style="margin-top: 32px; margin-bottom: 16px;">
     <h3 style="font-weight: 600; color: #1e1e2d;">📭 Sale Not Submitted — Current Month</h3>
@@ -1770,13 +1874,15 @@ col1, col2 = st.columns(2)
 with col1:
     if not failed_sms.empty:
         csv_failed = failed_sms.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Failed SMS CSV", data=csv_failed, file_name="failed_sms.csv", mime="text/csv")
+        st.download_button("📥 Download Failed SMS CSV", data=csv_failed,
+                           file_name="failed_sms.csv", mime="text/csv")
     else:
         st.info("No failed clients to export.")
 with col2:
     if not tracking_sms.empty:
         csv_tracking = tracking_sms.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Intracking SMS CSV", data=csv_tracking, file_name="intracking_sms.csv", mime="text/csv")
+        st.download_button("📥 Download Intracking SMS CSV", data=csv_tracking,
+                           file_name="intracking_sms.csv", mime="text/csv")
     else:
         st.info("No intracking clients to export.")
 
@@ -1817,11 +1923,11 @@ with st.expander("🔍 Data Preview (Debugging)"):
             st.dataframe(pd.DataFrame(pmt_debug['pmt_sms_sample']), width='stretch')
         else:
             st.warning("Cleaned Payment Report is empty – check column detection.")
-        st.write(f"**Rows matching 'Failed/Disputed/Cancelled Mandate' keywords (within period):** {pmt_debug['failed_count']}")
-        st.write(f"**Rows matching 'Tracking/Intracking' keywords:** {pmt_debug['tracking_count']}")
-        st.write(f"**Rows matching 'Disputed' only:** {pmt_debug['disputed_count']}")
-        st.write(f"**Rows matching 'Client Cancelled Mandate' only:** {pmt_debug['cancelled_mandate_count']}")
-        st.write(f"**Rows matching 'Sale Not Submitted' only:** {pmt_debug['sale_not_submitted_count']}")
+        st.write(f"**Rows matching Failed/Disputed/Cancelled Mandate keywords (within period):** {pmt_debug['failed_count']}")
+        st.write(f"**Rows matching Tracking/Intracking keywords:** {pmt_debug['tracking_count']}")
+        st.write(f"**Rows matching Disputed only:** {pmt_debug['disputed_count']}")
+        st.write(f"**Rows matching Client Cancelled Mandate only:** {pmt_debug['cancelled_mandate_count']}")
+        st.write(f"**Rows matching Sale Not Submitted only:** {pmt_debug['sale_not_submitted_count']}")
 
     st.subheader("Sample of Raw Data")
     st.dataframe(raw.head(10), width='stretch')
@@ -1840,89 +1946,5 @@ with st.expander("🔍 Data Preview (Debugging)"):
         st.dataframe(sns_rows.head(20), width='stretch')
     else:
         st.info("No Sale Not Submitted rows found in the Fee Audit.")
-
-# ---- Download full Excel report ----
-st.subheader("📥 Download Full Excel Report")
-
-def generate_excel():
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        dashboard_data = {
-            'Metric': ['Settled Period (Stage 1/2)', 'Settled Today', 'Settled Period Total',
-                       'Settling (Stage 1/2)', 'Submitted (Stage 1/2)', 'Sub Collect (Stage 1/2)', 'Intracking (Stage 1/2)',
-                       'Curr Month Debits (Stage 1/2)', 'Next Month Debits (Stage 1/2)',
-                       'Failed Period (Stage 1/2)', 'Failed MTD (Stage 1/2)',
-                       'Disputed (Stage 1/2)', 'Client Cancelled Mandate (Stage 1/2)', 'Sale Not Submitted (Stage 1/2)',
-                       'Revenue Total (Stage 1/2, Period)',
-                       'Success Rate (Period, by value, Disputed = Failure)',
-                       'Single Month Mode'],
-            'Value': [f"{settled_cycle_c} | R{settled_cycle_v:,.2f}",
-                      f"{settled_today_c} | R{settled_today_v:,.2f}",
-                      f"{settled_mtd_c} | R{settled_mtd_v:,.2f}",
-                      f"{settling_c} | R{settling_v:,.2f}",
-                      f"{submitted_c} | R{submitted_v:,.2f}",
-                      f"{sub_col_c} | R{sub_col_v:,.2f}",
-                      f"{tracking_c} | R{tracking_v:,.2f}",
-                      f"{current_debits_c} | R{current_debits_v:,.2f}",
-                      f"{next_debits_c} | R{next_debits_v:,.2f}" if not single_month_mode else "N/A",
-                      f"{failed_cycle_c} | R{failed_cycle_v:,.2f}",
-                      f"{failed_mtd_c} | R{failed_mtd_v:,.2f}",
-                      f"{disputed_c} | R{disputed_v:,.2f}",
-                      f"{cancelled_mandate_c} | R{cancelled_mandate_v:,.2f}",
-                      f"{sale_not_submitted_c} | R{sale_not_submitted_v:,.2f}",
-                      f"R{revenue_total:,.2f}",
-                      f"{success_rate:.1f}%",
-                      "Yes" if single_month_mode else "No"]
-        }
-        pd.DataFrame(dashboard_data).to_excel(writer, sheet_name='Dashboard', index=False)
-
-        combined_priority.to_excel(writer, sheet_name='Priority Queue', index=False, header=False)
-        workbook = writer.book
-        worksheet_pq = writer.sheets['Priority Queue']
-        worksheet_pq.set_column('A:A', None, workbook.add_format({'num_format': '@'}))
-
-        format_high = workbook.add_format({'bg_color': '#FF0000', 'font_color': '#FFFFFF', 'bold': True})
-        format_medium = workbook.add_format({'bg_color': '#FFA500', 'font_color': '#000000'})
-        format_low = workbook.add_format({'bg_color': '#FFFF00', 'font_color': '#000000'})
-        last_row_pq = len(combined_priority) + 1
-        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {'type': 'formula', 'criteria': f'=$I1="High"', 'format': format_high})
-        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {'type': 'formula', 'criteria': f'=$I1="Medium"', 'format': format_medium})
-        worksheet_pq.conditional_format(f'A1:I{last_row_pq}', {'type': 'formula', 'criteria': f'=$I1="Low"', 'format': format_low})
-
-        failed_clients.to_excel(writer, sheet_name='Failed Clients', index=False)
-        writer.sheets['Failed Clients'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
-
-        if not failed_sms.empty:
-            failed_sms_out = failed_sms[['Cell', 'Name', 'ID NUMBER', 'Stage', 'Amount', 'Status']]
-        else:
-            failed_sms_out = failed_sms
-        failed_sms_out.to_excel(writer, sheet_name='Failed Clients (SMS)', index=False)
-        writer.sheets['Failed Clients (SMS)'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
-
-        if not tracking_sms.empty:
-            tracking_sms_out = tracking_sms[['Cell', 'Name', 'ID NUMBER', 'Stage', 'Amount', 'Status']]
-        else:
-            tracking_sms_out = tracking_sms
-        tracking_sms_out.to_excel(writer, sheet_name='Intracking Clients (SMS)', index=False)
-        writer.sheets['Intracking Clients (SMS)'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
-
-        sale_not_submitted_sms.to_excel(writer, sheet_name='Sale Not Submitted', index=False)
-        writer.sheets['Sale Not Submitted'].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
-
-        for sheet_name, df in detail_dfs.items():
-            if not df.empty:
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
-                writer.sheets[sheet_name].set_column('A:A', None, workbook.add_format({'num_format': '@'}))
-
-    output.seek(0)
-    return output
-
-excel_data = generate_excel()
-st.download_button(
-    label="📥 Download Full Excel Report",
-    data=excel_data,
-    file_name=f"Debt_Review_Dashboard_{ref_date_used.strftime('%Y%m%d')}.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
 
 st.caption(f"Report generated based on reference date: {date_label}")
